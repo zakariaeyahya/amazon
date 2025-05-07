@@ -1,0 +1,23 @@
+version: '3.8'
+services:
+  airflow:
+    image: apache/airflow:2.7.2
+    env_file: .env
+    environment:
+        - _AIRFLOW_WWW_USER_CREATE=true
+        - _AIRFLOW_WWW_USER_USERNAME=admin
+        - _AIRFLOW_WWW_USER_PASSWORD=admin123
+        - AIRFLOW__CORE__FERNET_KEY=k6CpuyNfmTVlx6NSfe0Ly34M8P9s-q1exdjyXaJ4Cgc=
+    volumes:
+      - ./airflow_dags:/opt/airflow/dags
+      - ./data:/opt/airflow/data
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f /opt/airflow/airflow-webserver.pid ]"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: standalone

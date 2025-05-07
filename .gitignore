@@ -1,0 +1,49 @@
+# Create/update .gitignore with comprehensive exclusions
+@"
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.pytest_cache/
+
+# Airflow
+logs/
+data/
+airflow.db
+airflow-webserver.pid
+standalone_admin_password.txt
+airflow.cfg
+
+# Environment
+.env
+.env.*
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# Docker
+docker-compose.override.yml
+docker-compose.*.yml
+*.dockerignore
+
+# System
+Thumbs.db
+ehthumbs.db
+*.log
+*.sqlite
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Testing
+.coverage
+htmlcov/
+"@ > .gitignore
