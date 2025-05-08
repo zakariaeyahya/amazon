@@ -1,36 +1,40 @@
 """
-Optimized Amazon Scraping DAG
-This DAG coordinates the complete scraping process for Amazon products with:
-- Parallelization for better performance
-- Robust error handling and retries
-- Incremental scraping to avoid redundant work
-- Resource management to prevent IP blocking
-- Comprehensive logging and monitoring
+Optimized Amazon Scraping DAG with advanced error handling, monitoring, and efficient processing.
 """
 
-import os
 from datetime import datetime, timedelta
+import os
+import json
 from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.operators.dummy import DummyOperator
 from airflow.sensors.filesystem import FileSensor
-from airflow.utils.task_group import TaskGroup
 from airflow.models import Variable
-from airflow.hooks.filesystem import FSHook
+from airflow.utils.task_group import TaskGroup
+from airflow.utils.trigger_rule import TriggerRule
+from airflow.exceptions import AirflowSkipException
 
-# Import your scraper modules
 import sys
-sys.path.append('/path/to/your/project')  # Replace with your actual project path
-from scrapers.scraping import (
-    get_category_filters, 
-    get_products_from_category,
-    get_product_details,
-    get_product_reviews
-)
-from utils.file_utils import load_json, save_json, save_csv, load_csv
-from utils.request_utils import get_random_user_agent, setup_proxy_rotation
+import os
 
-# Default arguments for tasks
+# Add the project root to the Python path
+sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+
+# Import our custom modules
+from scrapers.scraping import run_full_scrape
+from scrapers.categories import scrape_categories
+from scrapers.amazon_details_scraper import scrape_product_details
+from scrapers.commentaire import scrape_reviews
+from scrapers.next_page import handle_pagination
+from utils.file_utils import merge_csv_files, clean_data, export_to_json
+from utils.scraping_logger import get_logger, scraper_logger
+from utils.scraping_metrics import metrics, time_operation
+from airflow_dags.sensors.amazon_product_sensor import AmazonProductSensor
+
+# Configure logger
+logger = get_logger('airflow_dag')
+
+# Default arguments for all tasks
 default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
@@ -39,481 +43,494 @@ default_args = {
     'retries': 3,
     'retry_delay': timedelta(minutes=5),
     'execution_timeout': timedelta(hours=2),
-    'start_date': datetime(2025, 5, 1),
-    # Add connection timeout
-    'pool': 'amazon_scraper_pool',  # Create this pool in Airflow UI with limited slots
+    'start_date': datetime(2023, 1, 1),
+    'pool': 'scraper_pool',  # Use a dedicated Airflow pool for scraping tasks
+    'priority_weight': 10
 }
 
-# Create the DAG
+# Create DAG
 dag = DAG(
-    'amazon_product_scraper',
+    'optimized_amazon_scraping',
     default_args=default_args,
-    description='Scrape Amazon products data incrementally with robust error handling',
-    schedule_interval='0 0 * * *',  # Daily at midnight, adjust as needed
+    description='Optimized Amazon product scraping pipeline',
+    schedule_interval=timedelta(days=1),  # Run daily
     catchup=False,
-    max_active_runs=1,
-    concurrency=16,  # Adjust based on your resources
-    tags=['scraping', 'amazon'],
+    max_active_runs=1,  # Only one run at a time
+    concurrency=8,      # Maximum concurrent tasks
+    tags=['scraping', 'amazon', 'optimized'],
 )
 
-# Function to handle scraping categories
-def scrape_categories(**kwargs):
-    """Scrape category filters and store them"""
-    categories = Variable.get("amazon_categories", deserialize_json=True, default=["electronics", "books"])
-    results = {}
-    
-    for category in categories:
-        category_filters = get_category_filters(category)
-        results[category] = category_filters
-    
-    # Save results to a timestamped file
-    timestamp = datetime.now().strftime("%Y%m%d")
-    file_path = f"{kwargs['data_dir']}/amazon_filters_{timestamp}.json"
-    save_json(results, file_path)
-    
-    # Also save to the main file for reference by other tasks
-    save_json(results, f"{kwargs['data_dir']}/amazon_filters.json")
-    
-    return file_path
+# Get configuration from Airflow Variables or use defaults
+try:
+    config = Variable.get("amazon_scraper_config", deserialize_json=True)
+except:
+    # Default configuration
+    config = {
+        'categories': ['electronics', 'computers', 'smart-home'],
+        'max_products_per_category': 100,
+        'max_pages_per_category': 5,
+        'scrape_reviews': True,
+        'max_reviews_per_product': 50,
+        'user_agent_rotation': True,
+        'proxy_rotation': True,
+        'request_delay': 1.5,  # seconds
+        'max_retries': 5,
+        'timeout': 30,  # seconds
+        'output_directory': 'data',
+        'export_formats': ['csv', 'json']
+    }
 
-# Function to get product listings from categories (paginated)
-def scrape_product_listings(**kwargs):
-    """Scrape product listings from each category"""
-    category = kwargs['category']
-    ti = kwargs['ti']
-    data_dir = kwargs['data_dir']
-    
-    # Load existing products to implement incremental scraping
-    existing_products = {}
+# Task function definitions
+@logger.airflow_task_logger('check_environment')
+def check_environment(**kwargs):
+    """Check if the environment is properly set up for scraping."""
     try:
-        existing_products_path = f"{data_dir}/amazon_products_all.csv"
-        if os.path.exists(existing_products_path):
-            existing_df = load_csv(existing_products_path)
-            existing_products = {row['product_id']: row for _, row in existing_df.iterrows()}
-    except Exception as e:
-        print(f"Warning: Could not load existing products: {e}")
-    
-    # Get filters
-    filters = load_json(f"{data_dir}/amazon_filters.json")
-    category_filters = filters.get(category, {})
-    
-    # Configure pagination
-    max_pages = int(Variable.get("max_pages_per_category", default=5))
-    
-    # Get product listings
-    new_products = get_products_from_category(
-        category, 
-        max_pages=max_pages, 
-        filters=category_filters,
-        existing_products=existing_products  # Pass existing products to avoid duplicates
-    )
-    
-    # Save category-specific results
-    timestamp = datetime.now().strftime("%Y%m%d")
-    file_path = f"{data_dir}/amazon_products_{category}_{timestamp}.csv"
-    save_csv(new_products, file_path)
-    
-    # Return the list of new product IDs for detailed scraping
-    return [p['product_id'] for p in new_products]
+        # Check if required directories exist
+        required_dirs = ['data', 'logs', 'scrapers', 'utils']
+        for directory in required_dirs:
+            if not os.path.isdir(directory):
+                os.makedirs(directory, exist_ok=True)
+                logger.info(f"Created directory: {directory}")
 
-# Function to scrape details for a batch of products
-def scrape_product_details(**kwargs):
-    """Scrape detailed information for a batch of products"""
-    ti = kwargs['ti']
-    data_dir = kwargs['data_dir']
-    batch_index = kwargs['batch_index']
-    
-    # Get all product IDs from upstream tasks
-    all_product_ids = []
-    categories = Variable.get("amazon_categories", deserialize_json=True, default=["electronics", "books"])
-    for category in categories:
-        task_id = f"get_product_listings.get_listings_{category}"
-        category_product_ids = ti.xcom_pull(task_ids=task_id) or []
-        all_product_ids.extend(category_product_ids)
-    
-    # Load existing product details to implement incremental scraping
-    existing_details = {}
-    try:
-        existing_details_path = f"{data_dir}/product_information.csv"
-        if os.path.exists(existing_details_path):
-            existing_df = load_csv(existing_details_path)
-            existing_details = {row['product_id']: row for _, row in existing_df.iterrows()}
-    except Exception as e:
-        print(f"Warning: Could not load existing product details: {e}")
-    
-    # Split products into batches for parallel processing
-    batch_size = int(Variable.get("product_batch_size", default=20))
-    total_batches = (len(all_product_ids) + batch_size - 1) // batch_size
-    
-    if batch_index >= total_batches:
-        print(f"Batch index {batch_index} exceeds total batches {total_batches}. Skipping.")
-        return []
-    
-    start_idx = batch_index * batch_size
-    end_idx = min((batch_index + 1) * batch_size, len(all_product_ids))
-    batch_product_ids = all_product_ids[start_idx:end_idx]
-    
-    # Filter out products we already have detailed information for
-    new_product_ids = [pid for pid in batch_product_ids if pid not in existing_details]
-    
-    if not new_product_ids:
-        print(f"No new products to process in batch {batch_index}. Skipping.")
-        return []
-    
-    # Setup proxy rotation and random user agents
-    setup_proxy_rotation()
-    
-    # Get product details with rate limiting and retries
-    product_details = []
-    for product_id in new_product_ids:
-        try:
-            details = get_product_details(product_id)
-            if details:
-                product_details.append(details)
-                # Add a small delay between requests to avoid rate limiting
-                time.sleep(float(Variable.get("request_delay_seconds", default=1.5)))
-        except Exception as e:
-            print(f"Error scraping product {product_id}: {e}")
-    
-    # Save this batch's results
-    if product_details:
-        timestamp = datetime.now().strftime("%Y%m%d")
-        file_path = f"{data_dir}/product_details_batch_{batch_index}_{timestamp}.csv"
-        save_csv(product_details, file_path)
-    
-    # Return the product IDs that were successfully processed
-    return [p['product_id'] for p in product_details]
-
-# Function to scrape reviews for products
-def scrape_product_reviews(**kwargs):
-    """Scrape reviews for products"""
-    ti = kwargs['ti']
-    data_dir = kwargs['data_dir']
-    batch_index = kwargs['batch_index']
-    
-    # Get successfully processed product IDs from the details task
-    task_id = f"get_product_details.get_details_batch_{batch_index}"
-    product_ids = ti.xcom_pull(task_ids=task_id) or []
-    
-    if not product_ids:
-        print(f"No products to get reviews for in batch {batch_index}. Skipping.")
-        return
-    
-    # Load existing reviews to implement incremental scraping
-    existing_reviews = {}
-    try:
-        existing_reviews_path = f"{data_dir}/amazon_reviews.json"
-        if os.path.exists(existing_reviews_path):
-            existing_reviews = load_json(existing_reviews_path)
-    except Exception as e:
-        print(f"Warning: Could not load existing reviews: {e}")
-    
-    # Setup proxy rotation and random user agents
-    setup_proxy_rotation()
-    
-    # Get reviews with rate limiting
-    all_reviews = {}
-    for product_id in product_ids:
-        # Skip if we already have recent reviews for this product
-        if product_id in existing_reviews:
-            last_scraped = existing_reviews[product_id].get('last_scraped')
-            if last_scraped:
-                last_scraped_date = datetime.strptime(last_scraped, "%Y-%m-%d")
-                days_since_scrape = (datetime.now() - last_scraped_date).days
-                # Only re-scrape reviews if it's been more than a week
-                if days_since_scrape < 7:
-                    print(f"Skipping reviews for {product_id}, scraped {days_since_scrape} days ago")
-                    all_reviews[product_id] = existing_reviews[product_id]
-                    continue
+        # Check if we have the necessary modules
+        import requests
+        import bs4
+        import pandas
         
-        try:
-            reviews = get_product_reviews(product_id)
-            if reviews:
-                all_reviews[product_id] = {
-                    'reviews': reviews,
-                    'last_scraped': datetime.now().strftime("%Y-%m-%d")
-                }
-                # Add a small delay between requests
-                time.sleep(float(Variable.get("request_delay_seconds", default=1.5)))
-        except Exception as e:
-            print(f"Error scraping reviews for product {product_id}: {e}")
-    
-    # Save this batch's results
-    if all_reviews:
-        timestamp = datetime.now().strftime("%Y%m%d")
-        file_path = f"{data_dir}/reviews_batch_{batch_index}_{timestamp}.json"
-        save_json(all_reviews, file_path)
-    
-    return
-
-# Function to merge all batched files into the main datasets
-def merge_results(**kwargs):
-    """Merge all batch results into main datasets"""
-    data_dir = kwargs['data_dir']
-    ti = kwargs['ti']
-    
-    # Merge product details
-    import pandas as pd
-    import glob
-    
-    # Find all batch files
-    detail_batch_files = glob.glob(f"{data_dir}/product_details_batch_*_*.csv")
-    review_batch_files = glob.glob(f"{data_dir}/reviews_batch_*_*.json")
-    
-    # Merge product details
-    all_details = []
-    for file in detail_batch_files:
-        try:
-            details = load_csv(file)
-            all_details.extend(details)
-        except Exception as e:
-            print(f"Error loading detail file {file}: {e}")
-    
-    # Load existing details and merge
-    try:
-        existing_details_path = f"{data_dir}/product_information.csv"
-        if os.path.exists(existing_details_path):
-            existing_details = load_csv(existing_details_path)
-            
-            # Create dict of product_id -> row for efficient lookup
-            existing_dict = {row['product_id']: row for _, row in pd.DataFrame(existing_details).iterrows()}
-            new_dict = {row['product_id']: row for row in all_details}
-            
-            # Merge existing with new, preferring new data
-            merged_dict = {**existing_dict, **new_dict}
-            all_details = list(merged_dict.values())
+        logger.info("Environment check passed")
+        return True
     except Exception as e:
-        print(f"Warning: Could not merge with existing details: {e}")
-    
-    # Save merged details
-    if all_details:
-        save_csv(all_details, f"{data_dir}/product_information.csv")
-    
-    # Merge reviews
-    all_reviews = {}
-    for file in review_batch_files:
-        try:
-            reviews = load_json(file)
-            all_reviews.update(reviews)
-        except Exception as e:
-            print(f"Error loading review file {file}: {e}")
-    
-    # Load existing reviews and merge
+        logger.error(f"Environment check failed: {str(e)}")
+        raise
+
+@logger.airflow_task_logger('prepare_scraping')
+def prepare_scraping(**kwargs):
+    """Prepare for scraping by setting up necessary files and configurations."""
     try:
-        existing_reviews_path = f"{data_dir}/amazon_reviews.json"
-        if os.path.exists(existing_reviews_path):
-            existing_reviews = load_json(existing_reviews_path)
-            # Merge existing with new, preferring new data
-            merged_reviews = {**existing_reviews, **all_reviews}
-            all_reviews = merged_reviews
-    except Exception as e:
-        print(f"Warning: Could not merge with existing reviews: {e}")
-    
-    # Save merged reviews
-    if all_reviews:
-        save_json(all_reviews, f"{data_dir}/amazon_reviews.json")
-    
-    # Clean up batch files if needed
-    if Variable.get("cleanup_batch_files", default="False") == "True":
-        for file in detail_batch_files + review_batch_files:
-            try:
-                os.remove(file)
-            except Exception as e:
-                print(f"Error removing batch file {file}: {e}")
-    
-    return
-
-# Function to check data freshness and trigger scraping
-def check_data_freshness(**kwargs):
-    """Determine if a full scrape is needed or just an incremental update"""
-    data_dir = kwargs['data_dir']
-    
-    # Check when the last full scrape was performed
-    last_scrape_marker = f"{data_dir}/last_full_scrape.txt"
-    perform_full_scrape = True
-    
-    if os.path.exists(last_scrape_marker):
-        with open(last_scrape_marker, 'r') as f:
-            last_scrape_date = datetime.strptime(f.read().strip(), "%Y-%m-%d")
-            days_since_scrape = (datetime.now() - last_scrape_date).days
-            
-            # If it's been less than the threshold, do an incremental scrape
-            if days_since_scrape < int(Variable.get("full_scrape_interval_days", default=7)):
-                perform_full_scrape = False
-    
-    # Update the marker file
-    with open(last_scrape_marker, 'w') as f:
-        f.write(datetime.now().strftime("%Y-%m-%d"))
-    
-    return "full_scrape" if perform_full_scrape else "incremental_scrape"
-
-# Define data directory
-data_dir = "{{ dag_run.conf['data_dir'] if dag_run.conf and 'data_dir' in dag_run.conf else '/path/to/your/project/data' }}"
-
-# Start of the pipeline
-start = DummyOperator(
-    task_id='start',
-    dag=dag,
-)
-
-# Check if we need full or incremental scrape
-check_freshness = PythonOperator(
-    task_id='check_data_freshness',
-    python_callable=check_data_freshness,
-    op_kwargs={'data_dir': data_dir},
-    dag=dag,
-)
-
-# Branch task to decide between full and incremental scrape
-from airflow.operators.python import BranchPythonOperator
-
-def decide_scrape_path(**kwargs):
-    ti = kwargs['ti']
-    scrape_type = ti.xcom_pull(task_ids='check_data_freshness')
-    if scrape_type == "full_scrape":
-        return "scrape_categories"
-    else:
-        return "skip_categories_scrape"
-
-branch_op = BranchPythonOperator(
-    task_id='decide_scrape_path',
-    python_callable=decide_scrape_path,
-    dag=dag,
-)
-
-skip_categories = DummyOperator(
-    task_id='skip_categories_scrape',
-    dag=dag,
-)
-
-# Task to scrape categories
-scrape_categories_task = PythonOperator(
-    task_id='scrape_categories',
-    python_callable=scrape_categories,
-    op_kwargs={'data_dir': data_dir},
-    dag=dag,
-)
-
-# Join paths
-join_paths = DummyOperator(
-    task_id='join_paths',
-    trigger_rule='one_success',
-    dag=dag,
-)
-
-# Task group for product listings
-with TaskGroup(group_id="get_product_listings", dag=dag) as get_product_listings:
-    categories = Variable.get("amazon_categories", deserialize_json=True, default=["electronics", "books"])
-    
-    listing_tasks = []
-    for category in categories:
-        get_listings = PythonOperator(
-            task_id=f"get_listings_{category}",
-            python_callable=scrape_product_listings,
-            op_kwargs={
-                'category': category,
-                'data_dir': data_dir
-            },
-            dag=dag,
-        )
-        listing_tasks.append(get_listings)
-
-# Calculate number of batches dynamically
-def calculate_batches(**kwargs):
-    ti = kwargs['ti']
-    
-    # Count total products from all categories
-    total_products = 0
-    categories = Variable.get("amazon_categories", deserialize_json=True, default=["electronics", "books"])
-    for category in categories:
-        task_id = f"get_product_listings.get_listings_{category}"
-        category_product_ids = ti.xcom_pull(task_ids=task_id) or []
-        total_products += len(category_product_ids)
-    
-    batch_size = int(Variable.get("product_batch_size", default=20))
-    total_batches = (total_products + batch_size - 1) // batch_size
-    
-    return {"total_batches": max(1, total_batches)}  # At least 1 batch
-
-calculate_batches_task = PythonOperator(
-    task_id='calculate_batches',
-    python_callable=calculate_batches,
-    dag=dag,
-)
-
-# Task group for product details
-with TaskGroup(group_id="get_product_details", dag=dag) as get_product_details:
-    def create_dynamic_tasks(**kwargs):
         ti = kwargs['ti']
-        batch_info = ti.xcom_pull(task_ids='calculate_batches')
-        total_batches = batch_info['total_batches']
+        execution_date = kwargs['execution_date']
         
-        detail_tasks = []
-        for batch_index in range(total_batches):
-            detail_task = PythonOperator(
-                task_id=f"get_details_batch_{batch_index}",
-                python_callable=scrape_product_details,
-                op_kwargs={
-                    'batch_index': batch_index,
-                    'data_dir': data_dir
-                },
-                dag=dag,
-            )
-            detail_tasks.append(detail_task)
+        # Create a unique run ID based on the execution date
+        run_id = execution_date.strftime('%Y%m%d_%H%M%S')
         
-        return detail_tasks
-    
-    # This is a placeholder - in a production environment,
-    # you would likely use a dynamic task mapping feature
-    # For this example, we'll create a fixed number of batch tasks
-    max_batches = int(Variable.get("max_detail_batches", default=10))
-    detail_tasks = []
-    
-    for batch_index in range(max_batches):
-        detail_task = PythonOperator(
-            task_id=f"get_details_batch_{batch_index}",
-            python_callable=scrape_product_details,
-            op_kwargs={
-                'batch_index': batch_index,
-                'data_dir': data_dir
-            },
-            dag=dag,
-        )
-        detail_tasks.append(detail_task)
+        # Determine which categories to scrape
+        categories = config['categories']
+        
+        # Create a configuration for this run
+        run_config = {
+            'run_id': run_id,
+            'categories': categories,
+            'max_products_per_category': config['max_products_per_category'],
+            'max_pages_per_category': config['max_pages_per_category'],
+            'scrape_reviews': config['scrape_reviews'],
+            'timestamp': execution_date.isoformat(),
+            'output_files': {
+                'products': f"data/{run_id}_products.csv",
+                'reviews': f"data/{run_id}_reviews.json",
+                'categories': f"data/{run_id}_categories.json"
+            }
+        }
+        
+        # Push the configuration to XCom for downstream tasks
+        ti.xcom_push(key='run_config', value=run_config)
+        
+        # Log the configuration
+        logger.info(f"Prepared scraping run: {run_id}")
+        logger.debug(f"Run configuration: {json.dumps(run_config)}")
+        
+        # Create empty output files to ensure they exist
+        for output_file in run_config['output_files'].values():
+            with open(output_file, 'w') as f:
+                if output_file.endswith('.json'):
+                    f.write('{}')
+                elif output_file.endswith('.csv'):
+                    f.write('')
+        
+        return run_config
+    except Exception as e:
+        logger.error(f"Prepare scraping failed: {str(e)}")
+        raise
 
-# Task group for product reviews
-with TaskGroup(group_id="get_product_reviews", dag=dag) as get_product_reviews:
-    max_batches = int(Variable.get("max_detail_batches", default=10))
-    review_tasks = []
-    
-    for batch_index in range(max_batches):
-        review_task = PythonOperator(
-            task_id=f"get_reviews_batch_{batch_index}",
-            python_callable=scrape_product_reviews,
-            op_kwargs={
-                'batch_index': batch_index,
-                'data_dir': data_dir
-            },
-            dag=dag,
+@logger.airflow_task_logger('scrape_category')
+@time_operation('category_scrape')
+def scrape_category(category, **kwargs):
+    """Scrape a single category."""
+    try:
+        ti = kwargs['ti']
+        run_config = ti.xcom_pull(task_ids='prepare_scraping', key='run_config')
+        
+        logger.info(f"Starting scrape for category: {category}")
+        
+        # Set context for logging
+        logger.set_context(category=category, custom_data={'run_id': run_config['run_id']})
+        
+        # Start metrics for this category
+        metrics.increment(f'category.{category}.started')
+        metrics.start_timer(f'category_{category}')
+        
+        # Run the scraper for this category
+        result = scrape_categories(
+            category=category,
+            max_pages=run_config['max_pages_per_category'],
+            max_products=run_config['max_products_per_category'],
+            output_file=run_config['output_files']['categories']
         )
-        review_tasks.append(review_task)
+        
+        # Record time and success
+        elapsed = metrics.stop_timer(f'category_{category}', 'category_scrape')
+        metrics.increment(f'category.{category}.completed')
+        
+        logger.info(f"Completed scrape for category {category} in {elapsed:.2f}s")
+        
+        return result
+    except Exception as e:
+        metrics.record_error(f"category_scrape_{category}")
+        logger.error(f"Error scraping category {category}: {str(e)}")
+        raise
 
-# Merge results task
-merge_task = PythonOperator(
-    task_id='merge_results',
-    python_callable=merge_results,
-    op_kwargs={'data_dir': data_dir},
+@logger.airflow_task_logger('scrape_product_details')
+@time_operation('product_details')
+def process_product_details(**kwargs):
+    """Process product details for products found in categories."""
+    try:
+        ti = kwargs['ti']
+        run_config = ti.xcom_pull(task_ids='prepare_scraping', key='run_config')
+        
+        # Load the category results
+        with open(run_config['output_files']['categories'], 'r') as f:
+            category_data = json.load(f)
+        
+        # Get product URLs from the category data
+        product_urls = []
+        for category, data in category_data.items():
+            if 'product_urls' in data:
+                product_urls.extend(data['product_urls'])
+        
+        logger.info(f"Found {len(product_urls)} products to scrape")
+        
+        # Set up progress tracking
+        metrics.set_gauge('total_products', len(product_urls))
+        products_scraped = 0
+        
+        # Process each product
+        product_results = []
+        for url in product_urls:
+            try:
+                metrics.start_timer(f'product_{url}')
+                
+                # Scrape the product details
+                product_data = scrape_product_details(url)
+                
+                if product_data:
+                    product_results.append(product_data)
+                    products_scraped += 1
+                    metrics.increment('products_scraped')
+                
+                # Record time
+                elapsed = metrics.stop_timer(f'product_{url}', 'product_details')
+                logger.debug(f"Scraped product {url} in {elapsed:.2f}s")
+                
+            except Exception as e:
+                metrics.record_error('product_details')
+                logger.error(f"Error scraping product {url}: {str(e)}")
+                # Continue with the next product
+        
+        # Save the results
+        output_file = run_config['output_files']['products']
+        if product_results:
+            import pandas as pd
+            df = pd.DataFrame(product_results)
+            df.to_csv(output_file, index=False)
+            logger.info(f"Saved {len(product_results)} products to {output_file}")
+        
+        # Update metrics
+        metrics.set_gauge('products_scraped', products_scraped)
+        
+        return products_scraped
+    except Exception as e:
+        metrics.record_error('process_product_details')
+        logger.error(f"Error processing product details: {str(e)}")
+        raise
+
+@logger.airflow_task_logger('scrape_reviews')
+@time_operation('reviews_scrape')
+def process_reviews(**kwargs):
+    """Scrape reviews for products if enabled."""
+    try:
+        ti = kwargs['ti']
+        run_config = ti.xcom_pull(task_ids='prepare_scraping', key='run_config')
+        
+        if not run_config['scrape_reviews']:
+            logger.info("Review scraping disabled, skipping")
+            return 0
+        
+        # Load the product data
+        import pandas as pd
+        try:
+            products_df = pd.read_csv(run_config['output_files']['products'])
+        except:
+            logger.warning("No product data found, skipping review scraping")
+            return 0
+        
+        if products_df.empty:
+            logger.warning("No products to scrape reviews for")
+            return 0
+        
+        # Get product URLs - assuming the URL column is named 'url'
+        if 'url' not in products_df.columns:
+            logger.error("Product data doesn't contain URL column")
+            return 0
+        
+        product_urls = products_df['url'].tolist()
+        logger.info(f"Found {len(product_urls)} products to scrape reviews for")
+        
+        # Set up progress tracking
+        metrics.set_gauge('total_products_for_reviews', len(product_urls))
+        reviews_scraped = 0
+        
+        # Process reviews for each product
+        all_reviews = []
+        for url in product_urls:
+            try:
+                metrics.start_timer(f'reviews_{url}')
+                
+                # Scrape reviews
+                product_reviews = scrape_reviews(
+                    url, 
+                    max_reviews=config['max_reviews_per_product']
+                )
+                
+                if product_reviews:
+                    all_reviews.extend(product_reviews)
+                    reviews_scraped += len(product_reviews)
+                    metrics.increment('reviews_scraped', len(product_reviews))
+                
+                # Record time
+                elapsed = metrics.stop_timer(f'reviews_{url}', 'reviews_scrape')
+                logger.debug(f"Scraped {len(product_reviews) if product_reviews else 0} reviews for {url} in {elapsed:.2f}s")
+                
+            except Exception as e:
+                metrics.record_error('reviews_scrape')
+                logger.error(f"Error scraping reviews for {url}: {str(e)}")
+                # Continue with the next product
+        
+        # Save the reviews
+        with open(run_config['output_files']['reviews'], 'w') as f:
+            json.dump(all_reviews, f, indent=2)
+        
+        logger.info(f"Saved {reviews_scraped} reviews to {run_config['output_files']['reviews']}")
+        
+        # Update metrics
+        metrics.set_gauge('reviews_scraped', reviews_scraped)
+        
+        return reviews_scraped
+    except Exception as e:
+        metrics.record_error('process_reviews')
+        logger.error(f"Error processing reviews: {str(e)}")
+        raise
+
+@logger.airflow_task_logger('post_process_data')
+def post_process_data(**kwargs):
+    """Post-process the scraped data."""
+    try:
+        ti = kwargs['ti']
+        run_config = ti.xcom_pull(task_ids='prepare_scraping', key='run_config')
+        
+        logger.info("Starting post-processing of scraped data")
+        
+        # Clean product data
+        products_file = run_config['output_files']['products']
+        if os.path.exists(products_file) and os.path.getsize(products_file) > 0:
+            # Clean and transform the product data
+            clean_data(products_file, products_file)
+            logger.info(f"Cleaned product data in {products_file}")
+            
+            # Export to other formats if configured
+            if 'json' in config['export_formats']:
+                json_file = products_file.replace('.csv', '.json')
+                export_to_json(products_file, json_file)
+                logger.info(f"Exported product data to JSON: {json_file}")
+        
+        # Calculate statistics
+        try:
+            import pandas as pd
+            stats = {}
+            
+            # Product stats
+            try:
+                df = pd.read_csv(products_file)
+                stats['product_count'] = len(df)
+                
+                # More product statistics can be added here
+                if 'price' in df.columns:
+                    stats['avg_price'] = df['price'].mean()
+                    stats['min_price'] = df['price'].min()
+                    stats['max_price'] = df['price'].max()
+            except:
+                logger.warning("Could not calculate product statistics")
+            
+            # Review stats
+            try:
+                with open(run_config['output_files']['reviews'], 'r') as f:
+                    reviews = json.load(f)
+                stats['review_count'] = len(reviews)
+                
+                # More review statistics can be added here
+            except:
+                logger.warning("Could not calculate review statistics")
+            
+            # Save statistics
+            stats_file = f"data/{run_config['run_id']}_stats.json"
+            with open(stats_file, 'w') as f:
+                json.dump(stats, f, indent=2)
+                
+            logger.info(f"Generated statistics: {json.dumps(stats)}")
+            
+            # Push stats to XCom
+            ti.xcom_push(key='scraping_stats', value=stats)
+            
+        except Exception as e:
+            logger.error(f"Error calculating statistics: {str(e)}")
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error in post-processing: {str(e)}")
+        raise
+
+@logger.airflow_task_logger('generate_report')
+def generate_report(**kwargs):
+    """Generate a summary report of the scraping run."""
+    try:
+        ti = kwargs['ti']
+        run_config = ti.xcom_pull(task_ids='prepare_scraping', key='run_config')
+        stats = ti.xcom_pull(task_ids='post_process_data', key='scraping_stats')
+        
+        if not stats:
+            logger.warning("No statistics available for report")
+            stats = {}
+        
+        # Get metrics summary
+        from utils.scraping_metrics import get_current_metrics
+        metrics_data = get_current_metrics()
+        
+        # Create the report
+        report = {
+            'run_id': run_config['run_id'],
+            'timestamp': datetime.now().isoformat(),
+            'execution_date': kwargs['execution_date'].isoformat(),
+            'categories': run_config['categories'],
+            'statistics': stats,
+            'performance': {
+                'products_scraped': metrics_data['counters'].get('products_scraped', 0),
+                'reviews_scraped': metrics_data['counters'].get('reviews_scraped', 0),
+                'errors': metrics_data['counters'].get('total_errors', 0),
+                'avg_request_time': metrics_data['request_stats'].get('avg_request_time', 0),
+                'total_runtime': metrics_data['uptime_seconds']
+            },
+            'output_files': run_config['output_files']
+        }
+        
+        # Save the report
+        report_file = f"data/{run_config['run_id']}_report.json"
+        with open(report_file, 'w') as f:
+            json.dump(report, f, indent=2)
+        
+        logger.info(f"Generated report: {report_file}")
+        
+        # Also create a simple text version
+        text_report = f"""
+Amazon Scraping Report
+=====================
+Run ID: {run_config['run_id']}
+Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Summary
+-------
+Categories scraped: {', '.join(run_config['categories'])}
+Products scraped: {stats.get('product_count', 0)}
+Reviews scraped: {stats.get('review_count', 0)}
+
+Performance
+-----------
+Average request time: {metrics_data['request_stats'].get('avg_request_time', 0):.2f} seconds
+Total runtime: {metrics_data['uptime_seconds'] / 60:.2f} minutes
+Error count: {metrics_data['counters'].get('total_errors', 0)}
+
+Output Files
+-----------
+Products: {run_config['output_files']['products']}
+Reviews: {run_config['output_files']['reviews']}
+Categories: {run_config['output_files']['categories']}
+        """
+        
+        text_report_file = f"data/{run_config['run_id']}_report.txt"
+        with open(text_report_file, 'w') as f:
+            f.write(text_report)
+        
+        logger.info(f"Generated text report: {text_report_file}")
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error generating report: {str(e)}")
+        raise
+
+# Define the tasks
+check_env = PythonOperator(
+    task_id='check_environment',
+    python_callable=check_environment,
     dag=dag,
 )
 
-# End task
-end = DummyOperator(
-    task_id='end',
+prepare = PythonOperator(
+    task_id='prepare_scraping',
+    python_callable=prepare_scraping,
+    dag=dag,
+)
+
+# Create a task group for category scraping
+with TaskGroup(group_id='scrape_categories', dag=dag) as category_group:
+    category_tasks = []
+    for category in config['categories']:
+        task = PythonOperator(
+            task_id=f'scrape_category_{category}',
+            python_callable=scrape_category,
+            op_kwargs={'category': category},
+            dag=dag,
+        )
+        category_tasks.append(task)
+
+product_details = PythonOperator(
+    task_id='scrape_product_details',
+    python_callable=process_product_details,
+    dag=dag,
+)
+
+reviews = PythonOperator(
+    task_id='scrape_reviews',
+    python_callable=process_reviews,
+    dag=dag,
+)
+
+post_process = PythonOperator(
+    task_id='post_process_data',
+    python_callable=post_process_data,
+    dag=dag,
+)
+
+report = PythonOperator(
+    task_id='generate_report',
+    python_callable=generate_report,
     dag=dag,
 )
 
 # Define task dependencies
-start >> check_freshness >> branch_op
-branch_op >> scrape_categories_task >> join_paths
-branch_op >> skip_categories >> join_paths
-join_paths >> get_product_listings >> calculate_batches_task >> get_product_details >> get_product_reviews >> merge_task >> end
+check_env >> prepare >> category_group >> product_details >> reviews >> post_process >> report
+
+# Add this at the end to ensure metrics are saved when the DAG completes
+completion = DummyOperator(
+    task_id='completion',
+    dag=dag,
+    trigger_rule=TriggerRule.ALL_DONE,  # Run even if upstream tasks fail
+)
+
+report >> completion
