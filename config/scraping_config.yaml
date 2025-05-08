@@ -1,0 +1,156 @@
+# config/scraping_config.yaml
+
+# --------------------------
+# Target Configuration
+# --------------------------
+targets:
+  amazon:
+    base_url: "https://www.amazon.com"
+    departments:
+      electronics:
+        url: "/electronics/b/?ie=UTF8&node=172282"
+        priority: 1
+      books:
+        url: "/books-used-books-textbooks/b/?ie=UTF8&node=283155"
+        priority: 2
+    product_urls:
+      - "/dp/B08N5KWB9H"  # Example product
+      - "/dp/B09G9FPHY6"  # Another product
+
+# --------------------------
+# Rate Limiting & Retry Policies
+# --------------------------
+rate_limits:
+  global:
+    max_requests_per_minute: 120
+    delay_between_requests:
+      min: 1.2
+      max: 3.5
+  api:
+    max_concurrent: 5
+    burst_limit: 20
+  html:
+    max_concurrent: 3
+    burst_limit: 10
+
+retry_policy:
+  max_retries: 3
+  backoff_factor: 1.5
+  retryable_http_codes: [500, 502, 503, 504, 429]
+  retryable_exceptions:
+    - "TimeoutError"
+    - "ConnectionError"
+
+# --------------------------
+# Proxy Configuration
+# --------------------------
+proxies:
+  rotation_strategy: "round_robin"  # Options: round_robin, random, geographic
+  providers:
+    - name: "brightdata"
+      endpoint: "zproxy.lum-superproxy.io:22225"
+      auth: "USERNAME:PASSWORD"
+      zones: ["us", "eu"]
+    - name: "oxylabs"
+      endpoint: "pr.oxylabs.io:7777"
+      auth: "USERNAME:PASSWORD"
+      zones: ["global"]
+  whitelist:
+    - "localhost"
+    - "127.0.0.1"
+  rotation_interval: 300  # Seconds between rotations
+
+# --------------------------
+# Data Extraction Mappings
+# --------------------------
+extraction:
+  product_page:
+    title:
+      selector: "span#productTitle"
+      type: "text"
+      required: true
+    price:
+      selector: "span.a-price-whole"
+      type: "text"
+      regex: "\d+\.?\d*"
+    rating:
+      selector: "i.a-icon-star span.a-icon-alt"
+      type: "text"
+      regex: "(\d\.\d) out"
+    features:
+      selector: "div#feature-bullets ul li"
+      type: "list"
+  category_page:
+    products:
+      selector: "div[data-component-type='s-search-result']"
+      attributes:
+        asin: "data-asin"
+        title: "h2 a span"
+        price: ".a-price .a-offscreen"
+  search_results:
+    pagination:
+      next_page: "li.a-last a"
+      max_pages: 10
+
+# --------------------------
+# Browser Configuration
+# --------------------------
+browser:
+  headless: true
+  user_agents:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15"
+  window_size: "1920,1080"
+  timeout:
+    page_load: 30
+    script: 45
+    implicit: 5
+
+# --------------------------
+# Data Storage Configuration
+# --------------------------
+storage:
+  output_formats: ["csv", "json"]
+  csv:
+    directory: "data/processed/csv"
+    delimiter: ","
+    encoding: "utf-8"
+  json:
+    directory: "data/processed/json"
+    indent: 2
+  database:
+    enabled: false
+    type: "postgresql"
+    table_name: "amazon_products"
+
+# --------------------------
+# Monitoring & Logging
+# --------------------------
+monitoring:
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  log_file: "logs/scraping_logs/scraper.log"
+  metrics:
+    - "products_scraped"
+    - "request_errors"
+    - "proxy_rotations"
+  alert_thresholds:
+    error_rate: 5%  # Percentage of errors to trigger alert
+    throughput: <100req/hour  # Minimum acceptable throughput
+
+# --------------------------
+# Advanced Configuration
+# --------------------------
+advanced:
+  cache:
+    enabled: true
+    ttl: 86400  # 24 hours in seconds
+  javascript:
+    execute: true
+    wait_for:
+      - selector: "div#ppd"
+        timeout: 10
+  validation:
+    required_fields: ["title", "price"]
+    price:
+      min: 0.01
+      max: 10000
