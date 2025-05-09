@@ -1,64 +1,139 @@
-import requests
-from bs4 import BeautifulSoup
 import logging
 import json
 import re
+import time
+import csv
+import os
+import random
+import pandas as pd
+from selenium import webdriver
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # Configuration du logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def scrape_amazon_product_info(url):
-    """Scrape les informations du produit et les avis de la page produit Amazon."""
-    logger.info("Début du scraping des informations produit")
+# Fichiers de données
+PRODUCTS_CSV = "data/amazon_products_all.csv"
+OUTPUT_CSV = "data/amazon_reviews_all.csv"
+PROGRESS_FILE = "data/scraping_progress.json"
+
+def setup_driver():
+    """Configure et retourne une instance du WebDriver Firefox."""
+    logger.info("Configuration du WebDriver Firefox")
     
-    # En-têtes pour simuler un navigateur
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-    }
+    options = Options()
+    # Options recommandées pour éviter la détection
+    options.set_preference("dom.webdriver.enabled", False)
+    options.set_preference("useAutomationExtension", False)
+    
+    # Définir un User-Agent réaliste
+    options.set_preference("general.useragent.override", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/113.0")
+    
+    # Décommentez pour exécuter en mode headless (sans interface graphique)
+    # options.add_argument("--headless")
     
     try:
-        # Requête HTTP
-        response = requests.get(url, headers=headers)
+        # Version simple sans geckodriver spécifique
+        driver = webdriver.Firefox(options=options)
+        logger.info("Firefox WebDriver initialisé avec succès")
+        return driver
+    except Exception as e:
+        logger.error(f"Erreur lors de l'initialisation de Firefox WebDriver: {e}")
         
-        if response.status_code == 200:
-            logger.info(f"Connexion réussie: code {response.status_code}")
-            
-            # Parser le HTML
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Extraire le titre du produit
-            product_title_element = soup.find('span', id='productTitle')
-            title = product_title_element.text.strip() if product_title_element else "Titre inconnu"
-            
-            # Extraire l'ASIN (identifiant produit)
-            asin = extract_asin_from_url(url)
-            
-            # Construire le lien vers la page des avis
-            reviews_link = f"https://www.amazon.co.uk/product-reviews/{asin}" if asin else None
-            
-            # Extraire les avis de la page actuelle
-            reviews = extract_reviews_from_page(soup)
-            
-            # Résultats
-            product_info = {
-                'title': title,
-                'asin': asin,
-                'reviews_link': reviews_link,
-                'reviews': reviews
-            }
-            
-            logger.info(f"Scraping produit terminé: {len(reviews)} avis extraits")
-            return product_info
+        logger.error("\n=== INSTRUCTIONS DE DÉPANNAGE ===")
+        logger.error("1. Assurez-vous que Firefox est correctement installé")
+        logger.error("2. Téléchargez manuellement geckodriver depuis:")
+        logger.error("   https://github.com/mozilla/geckodriver/releases")
+        logger.error("3. Placez geckodriver.exe dans le même dossier que ce script ou dans votre PATH")
         
-        else:
-            logger.error(f"Échec de la connexion: code {response.status_code}")
-            return None
+        raise
+
+def load_already_scraped_reviews():
+    """Charge les commentaires déjà scrapés pour éviter les duplicats."""
+    already_scraped = {}
+    
+    # Vérifier si le fichier de sortie existe
+    if os.path.exists(OUTPUT_CSV):
+        try:
+            # Chargement des avis déjà scrapés
+            df = pd.read_csv(OUTPUT_CSV)
+            # Créer un dictionnaire avec asin et reviewer comme clés
+            for _, row in df.iterrows():
+                asin = row.get('asin', '')
+                reviewer = row.get('reviewer', '')
+                if asin not in already_scraped:
+                    already_scraped[asin] = set()
+                already_scraped[asin].add(reviewer)
+            
+            logger.info(f"Chargé {len(already_scraped)} produits avec des avis déjà scrapés")
+        except Exception as e:
+            logger.error(f"Erreur lors du chargement des avis existants: {e}")
+    
+    return already_scraped
+
+def load_progress():
+    """Charge la progression du scraping pour reprendre où on s'était arrêté."""
+    if os.path.exists(PROGRESS_FILE):
+        try:
+            with open(PROGRESS_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Erreur lors du chargement du fichier de progression: {e}")
+    
+    return {"last_index": -1}
+
+def save_progress(index):
+    """Sauvegarde la progression du scraping."""
+    try:
+        with open(PROGRESS_FILE, 'w') as f:
+            json.dump({"last_index": index}, f)
+        logger.info(f"Progression sauvegardée: index {index}")
+    except Exception as e:
+        logger.error(f"Erreur lors de la sauvegarde de la progression: {e}")
+
+def scrape_amazon_product_info(url, asin, title, already_scraped_reviewers=None):
+    """Scrape les informations du produit et les avis de la page produit Amazon avec Selenium."""
+    if already_scraped_reviewers is None:
+        already_scraped_reviewers = set()
+        
+    logger.info(f"Début du scraping pour le produit: {title} (ASIN: {asin})")
+    
+    driver = setup_driver()
+    
+    try:
+        # Naviguer vers l'URL
+        logger.info(f"Navigation vers {url}")
+        driver.get(url)
+        
+        # Attendre que la page se charge complètement
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
+        
+        # Vérifier et gérer les CAPTCHAs
+        if not handle_captcha(driver):
+            return []
+            
+        logger.info("Page chargée avec succès")
+        
+        # Extraire les avis de la page actuelle
+        reviews = extract_reviews_from_page(driver, asin, already_scraped_reviewers)
+        
+        logger.info(f"Scraping produit terminé: {len(reviews)} nouveaux avis extraits")
+        return reviews
     
     except Exception as e:
         logger.error(f"Erreur: {e}")
-        return None
+        return []
+    
+    finally:
+        # Fermer le navigateur
+        logger.info("Fermeture du navigateur")
+        driver.quit()
 
 def extract_asin_from_url(url):
     """Extraire l'ASIN du produit à partir de l'URL."""
@@ -67,212 +142,258 @@ def extract_asin_from_url(url):
         return asin_match.group(1)
     return None
 
-def extract_reviews_from_page(soup):
+def extract_reviews_from_page(driver, asin, already_scraped_reviewers):
     """Extraire les avis de la page actuelle au format spécifié."""
     logger.info("Extraction des avis")
     reviews = []
     
-    # Rechercher les blocs d'avis
-    review_elements = soup.find_all('div', {'data-hook': 'review'}) or \
-                     soup.find_all('div', {'id': lambda x: x and x.endswith('-review-card')})
+    # Attendre que les avis se chargent
+    try:
+        # Vérifier s'il y a une section d'avis sur la page
+        WebDriverWait(driver, 5).until(
+            lambda d: d.find_elements(By.ID, "cm-cr-dp-recent-reviews") or 
+                     d.find_elements(By.CSS_SELECTOR, 'div[data-hook="review"]')
+        )
+    except:
+        logger.info("Pas de section d'avis trouvée, il pourrait ne pas y avoir d'avis sur cette page")
     
-    logger.info(f"Nombre d'avis trouvés: {len(review_elements)}")
-    
-    for review_element in review_elements:
-        try:
-            # Initialiser un dictionnaire pour stocker les informations de l'avis
-            review_data = {}
-            
-            # 1. Nom du reviewer
-            profile_element = review_element.find('a', class_='a-profile')
-            if profile_element:
-                name_element = profile_element.find('span', class_='a-profile-name')
-                review_data['reviewer'] = name_element.text.strip() if name_element else "Anonyme"
-            else:
-                review_data['reviewer'] = "Anonyme"
-            
-            # 2. Note (étoiles)
-            rating_element = review_element.find('i', {'data-hook': 'review-star-rating'})
-            if rating_element:
-                rating_text = rating_element.find('span', class_='a-icon-alt')
-                if rating_text:
-                    # Extraire le nombre (ex: "5.0 out of 5 stars" -> 5)
-                    rating_match = re.search(r'(\d+\.\d+|\d+)', rating_text.text)
+    # Trouver tous les blocs d'avis
+    try:
+        # Attendre un court instant pour s'assurer que tout est chargé
+        time.sleep(2)
+        
+        # Rechercher les blocs d'avis avec différents sélecteurs possibles
+        review_elements = driver.find_elements(By.CSS_SELECTOR, 'div[data-hook="review"]')
+        
+        if not review_elements:
+            # Essayer un autre sélecteur si le premier ne fonctionne pas
+            review_elements = driver.find_elements(By.CSS_SELECTOR, 'div[id$="-review-card"]')
+        
+        logger.info(f"Nombre d'avis trouvés sur la page: {len(review_elements)}")
+        
+        for review_element in review_elements:
+            try:
+                # Extraire le nom du reviewer d'abord pour vérifier s'il est déjà scrapé
+                try:
+                    profile_element = review_element.find_element(By.CSS_SELECTOR, 'a.a-profile')
+                    name_element = profile_element.find_element(By.CSS_SELECTOR, 'span.a-profile-name')
+                    reviewer_name = name_element.text.strip()
+                except:
+                    reviewer_name = "Anonyme"
+                
+                # Vérifier si cet avis a déjà été scrapé pour ce produit
+                if reviewer_name in already_scraped_reviewers:
+                    logger.info(f"Avis de '{reviewer_name}' déjà scrapé pour ce produit, ignoré")
+                    continue
+                
+                # Initialiser un dictionnaire pour stocker les informations de l'avis
+                review_data = {'asin': asin, 'reviewer': reviewer_name}
+                
+                # 2. Note (étoiles)
+                try:
+                    rating_element = review_element.find_element(By.CSS_SELECTOR, 'i[data-hook="review-star-rating"]')
+                    rating_text = rating_element.get_attribute('textContent') or rating_element.text
+                    rating_match = re.search(r'(\d+\.\d+|\d+)', rating_text)
                     review_data['rating'] = float(rating_match.group(1)) if rating_match else 0
-                else:
-                    # Méthode alternative basée sur les classes
-                    star_class = None
-                    for cls in rating_element.get('class', []):
-                        if cls.startswith('a-star-'):
-                            star_class = cls
-                            break
-                    if star_class:
-                        review_data['rating'] = float(star_class.replace('a-star-', ''))
-                    else:
+                except:
+                    try:
+                        # Méthode alternative basée sur les classes
+                        rating_element = review_element.find_element(By.CSS_SELECTOR, '[class*="a-star-"]')
+                        star_class = rating_element.get_attribute('class')
+                        star_class_match = re.search(r'a-star-(\d+)', star_class)
+                        review_data['rating'] = float(star_class_match.group(1)) if star_class_match else 0
+                    except:
                         review_data['rating'] = 0
-            else:
-                review_data['rating'] = 0
-            
-            # 3. Titre de l'avis
-            title_element = review_element.find('a', {'data-hook': 'review-title'})
-            if title_element:
-                # Trouver le texte dans les spans
-                title_spans = title_element.find_all('span')
-                if title_spans:
-                    # Prendre le dernier span qui contient généralement le titre
-                    review_data['title'] = title_spans[-1].text.strip()
-                else:
-                    # Si pas de spans, prendre tout le texte
+                
+                # 3. Titre de l'avis
+                try:
+                    title_element = review_element.find_element(By.CSS_SELECTOR, 'a[data-hook="review-title"]')
                     review_data['title'] = title_element.text.strip()
-            else:
-                review_data['title'] = "Sans titre"
-            
-            # 4. Date et lieu de l'avis - MODIFIÉ
-            date_element = review_element.find('span', {'data-hook': 'review-date'})
-            if date_element:
-                full_date_text = date_element.text.strip()
-                # Extraire le lieu et la date avec regex
-                location_date_pattern = r'Reviewed in (.*?) on (.*)'
-                match = re.search(location_date_pattern, full_date_text)
+                except:
+                    review_data['title'] = "Sans titre"
                 
-                if match:
-                    review_data['location'] = match.group(1)
-                    review_data['date'] = match.group(2)
-                else:
-                    # Si le pattern ne correspond pas, garder la chaîne complète dans date
+                # 4. Date et lieu de l'avis
+                try:
+                    date_element = review_element.find_element(By.CSS_SELECTOR, 'span[data-hook="review-date"]')
+                    full_date_text = date_element.text.strip()
+                    # Extraire le lieu et la date avec regex
+                    location_date_pattern = r'Reviewed in (.*?) on (.*)'
+                    match = re.search(location_date_pattern, full_date_text)
+                    
+                    if match:
+                        review_data['location'] = match.group(1)
+                        review_data['date'] = match.group(2)
+                    else:
+                        # Si le pattern ne correspond pas, garder la chaîne complète dans date
+                        review_data['location'] = "Unknown"
+                        review_data['date'] = full_date_text
+                except:
                     review_data['location'] = "Unknown"
-                    review_data['date'] = full_date_text
-            else:
-                review_data['location'] = "Unknown"
-                review_data['date'] = "Date inconnue"
-            
-            # 5. Achat vérifié
-            verified_element = review_element.find('span', {'data-hook': 'avp-badge'})
-            review_data['verified_purchase'] = True if verified_element else False
-            
-            # 6. Contenu de l'avis
-            # MODIFICATION: Extraction du texte nettoyé de l'avis
-            review_body_element = review_element.find('span', {'data-hook': 'review-body'})
-            
-            if review_body_element:
-                # Trouver le contenu réel du texte
-                # Chercher d'abord dans la div avec la classe reviewText
-                review_text_div = review_body_element.find('div', class_='reviewText')
+                    review_data['date'] = "Date inconnue"
                 
-                if review_text_div:
-                    # Trouver le span contenant le texte
-                    span_content = review_text_div.find('span')
-                    if span_content:
-                        # Extraire uniquement le texte, sans balises HTML
-                        review_data['_comment'] = span_content.get_text(strip=True)
-                    else:
-                        review_data['_comment'] = review_text_div.get_text(strip=True)
-                else:
-                    # Chercher directement tous les spans contenus dans l'élément review-body
-                    spans = review_body_element.find_all('span')
-                    # Prendre le contenu textuel du dernier span qui contient généralement le texte principal
-                    if spans:
-                        for span in spans:
-                            # Si le span a du contenu textuel, c'est probablement le bon
-                            if span.get_text(strip=True):
-                                review_data['_comment'] = span.get_text(strip=True)
-                                break
-                        else:  # Si aucun span n'a été trouvé avec du contenu
-                            review_data['_comment'] = review_body_element.get_text(strip=True)
-                    else:
-                        review_data['_comment'] = review_body_element.get_text(strip=True)
-            else:
-                review_data['_comment'] = "Aucun commentaire disponible"
-            
-            # 7. Nombre de personnes qui ont trouvé cet avis utile
-            helpful_element = review_element.find('span', {'data-hook': 'helpful-vote-statement'})
-            helpful_count = 0
-            if helpful_element:
-                helpful_match = re.search(r'(\d+)', helpful_element.text)
-                helpful_count = int(helpful_match.group(1)) if helpful_match else 0
-            
-            # Ajouter cette information aux données de l'avis
-            review_data['helpful_count'] = helpful_count
-            
-            # 8. NOUVEAU: Extraire les images associées à l'avis
-            review_data['images'] = []
-            
-            # Rechercher les sections d'images
-            # Méthode 1: Rechercher par l'ID qui contient "imageSection"
-            image_sections = review_element.find_all('div', id=lambda x: x and 'imageSection' in x)
-            
-            # Méthode 2: Rechercher par classe "review-image-container"
-            if not image_sections:
-                image_sections = review_element.find_all('div', class_='review-image-container')
-            
-            # Méthode 3: Rechercher directement les balises img dans le corps de l'avis
-            if not image_sections:
-                image_sections = [review_element]  # Utiliser tout l'élément d'avis pour chercher des images
-            
-            # Parcourir toutes les sections d'images trouvées
-            for section in image_sections:
-                # Trouver toutes les balises img
-                img_tags = section.find_all('img', class_='review-image-tile')
+                # 5. Achat vérifié
+                try:
+                    review_element.find_element(By.CSS_SELECTOR, 'span[data-hook="avp-badge"]')
+                    review_data['verified_purchase'] = True
+                except:
+                    review_data['verified_purchase'] = False
                 
-                # Si aucune image n'est trouvée avec la classe spécifique, chercher toutes les images
-                if not img_tags:
-                    img_tags = section.find_all('img', alt='Customer image')
+                # 6. Contenu de l'avis
+                try:
+                    review_body_element = review_element.find_element(By.CSS_SELECTOR, 'span[data-hook="review-body"]')
+                    review_data['comment'] = review_body_element.text.strip()
+                except:
+                    review_data['comment'] = "Aucun commentaire disponible"
                 
-                # Si toujours rien, chercher toutes les images
-                if not img_tags:
-                    img_tags = section.find_all('img')
+                # 7. Nombre de personnes qui ont trouvé cet avis utile
+                try:
+                    helpful_element = review_element.find_element(By.CSS_SELECTOR, 'span[data-hook="helpful-vote-statement"]')
+                    helpful_text = helpful_element.text.strip()
+                    helpful_match = re.search(r'(\d+)', helpful_text)
+                    review_data['helpful_count'] = int(helpful_match.group(1)) if helpful_match else 0
+                except:
+                    review_data['helpful_count'] = 0
                 
-                # Extraire les URLs des images
-                for img in img_tags:
-                    if img.get('src'):
-                        img_url = img['src'].strip()
-                        # Ne pas ajouter d'URLs vides ou de placeholders
-                        if img_url and not img_url.endswith('placeholder.png') and not img_url.endswith('transparent-pixel.gif'):
-                            # Améliorer la qualité de l'image en remplaçant les suffixes de taille
-                            # Ex: _SY88.jpg -> .jpg pour obtenir l'image en pleine résolution
-                            img_url = re.sub(r'_(SY|SX|UL|UR|UC|AC|SR)\d+\.(jpg|png|gif)', r'.\2', img_url)
-                            review_data['images'].append(img_url)
-            
-            reviews.append(review_data)
-            
-        except Exception as e:
-            logger.error(f"Erreur lors de l'extraction d'un avis: {e}")
+                reviews.append(review_data)
+                
+            except Exception as e:
+                logger.error(f"Erreur lors de l'extraction d'un avis: {e}")
+    
+    except Exception as e:
+        logger.error(f"Erreur lors de l'extraction des avis: {e}")
     
     return reviews
 
-def save_to_json(data, filename):
-    """Sauvegarder les données dans un fichier JSON."""
-    logger.info(f"Sauvegarde dans {filename}")
+def handle_captcha(driver):
+    """Détecte et gère les CAPTCHA d'Amazon."""
     try:
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        logger.info(f"Données sauvegardées dans {filename}")
+        # Vérifier la présence d'un CAPTCHA
+        if "captcha" in driver.current_url.lower() or driver.find_elements(By.ID, "captchacharacters"):
+            logger.warning("CAPTCHA détecté! Le script ne peut pas continuer automatiquement.")
+            
+            # Attendre que l'utilisateur résolve le CAPTCHA manuellement
+            input("Veuillez résoudre le CAPTCHA dans le navigateur puis appuyez sur Entrée pour continuer...")
+            
+            # Vérifier si le CAPTCHA a été résolu
+            if "captcha" in driver.current_url.lower() or driver.find_elements(By.ID, "captchacharacters"):
+                logger.error("Le CAPTCHA n'a pas été résolu. Abandon.")
+                return False
+            
+            logger.info("CAPTCHA résolu, reprise du scraping.")
+            return True
+    except:
+        pass
+    
+    return True  # Pas de CAPTCHA détecté
+
+def save_reviews_to_csv(reviews, output_file):
+    """Sauvegarde les avis dans un fichier CSV."""
+    if not reviews:
+        logger.info("Aucun nouvel avis à sauvegarder")
+        return True
+        
+    try:
+        file_exists = os.path.exists(output_file)
+        
+        # Créer le répertoire de sortie si nécessaire
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        
+        # Ecrire en mode 'a' (append) si le fichier existe déjà, sinon en mode 'w'
+        mode = 'a' if file_exists else 'w'
+        with open(output_file, mode, newline='', encoding='utf-8') as f:
+            # Définir les colonnes
+            fieldnames = ['asin', 'reviewer', 'rating', 'title', 'date', 'location', 
+                         'verified_purchase', 'comment', 'helpful_count']
+            
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            
+            # Écrire l'en-tête uniquement si le fichier est nouveau
+            if not file_exists:
+                writer.writeheader()
+            
+            # Écrire les avis
+            for review in reviews:
+                writer.writerow({field: review.get(field, '') for field in fieldnames})
+        
+        logger.info(f"{len(reviews)} nouveaux avis sauvegardés dans {output_file}")
         return True
     except Exception as e:
-        logger.error(f"Erreur lors de la sauvegarde: {e}")
+        logger.error(f"Erreur lors de la sauvegarde des avis: {e}")
         return False
 
 def main():
     """Fonction principale d'exécution."""
-    # URL du produit à scraper
-    url = "https://www.amazon.co.uk/Lenovo-IdeaPad-Chromebook-Laptop-Celeron/dp/B0DNK1WFV6/ref=sr_1_6"
+    # Créer le répertoire de données si nécessaire
+    os.makedirs('data', exist_ok=True)
     
-    # Scraper les informations du produit et les avis de la page produit
-    product_info = scrape_amazon_product_info(url)
-    
-    if not product_info:
-        logger.error("Échec du scraping. Arrêt.")
+    # Charger les produits à scraper
+    if not os.path.exists(PRODUCTS_CSV):
+        logger.error(f"Le fichier {PRODUCTS_CSV} n'existe pas. Arrêt.")
         return
     
-    # Sauvegarder les résultats
-    if save_to_json(product_info, 'amazon_reviews.json'):
-        logger.info("Scraping terminé avec succès!")
-        
-        # Afficher un exemple du premier avis
-        if product_info.get('reviews'):
-            logger.info(f"Exemple du premier avis extrait: {json.dumps(product_info['reviews'][0], indent=2, ensure_ascii=False)}")
-    else:
-        logger.error("Erreur lors de la sauvegarde des résultats.")
+    # Charger la progression précédente
+    progress = load_progress()
+    last_index = progress.get("last_index", -1)
+    
+    # Charger les avis déjà scrapés
+    already_scraped = load_already_scraped_reviews()
+    
+    # Lire le fichier CSV des produits
+    try:
+        products_df = pd.read_csv(PRODUCTS_CSV)
+        logger.info(f"Chargé {len(products_df)} produits depuis {PRODUCTS_CSV}")
+    except Exception as e:
+        logger.error(f"Erreur lors du chargement du fichier des produits: {e}")
+        return
+    
+    # Parcourir chaque produit à partir du dernier index sauvegardé
+    for i, row in products_df.iloc[last_index + 1:].iterrows():
+        try:
+            url = row['url']
+            asin = row['asin']
+            title = row['titre']
+            
+            # Vérifier si l'ASIN est valide
+            if not asin or pd.isna(asin):
+                asin = extract_asin_from_url(url)
+                if not asin:
+                    logger.warning(f"Impossible de trouver l'ASIN pour le produit à l'index {i}, URL: {url}")
+                    continue
+            
+            # Récupérer les reviewers déjà scrapés pour ce produit
+            already_scraped_reviewers = already_scraped.get(asin, set())
+            
+            # Si nous avons déjà scrapé ce produit et que l'utilisateur souhaite le sauter
+            if asin in already_scraped and already_scraped_reviewers:
+                logger.info(f"Produit {asin} déjà scrapé avec {len(already_scraped_reviewers)} avis. Vérification de nouveaux avis.")
+            
+            # Scraper les avis pour ce produit
+            reviews = scrape_amazon_product_info(url, asin, title, already_scraped_reviewers)
+            
+            # Sauvegarder les nouveaux avis dans le CSV
+            if reviews:
+                save_reviews_to_csv(reviews, OUTPUT_CSV)
+                
+                # Mettre à jour les reviewers déjà scrapés
+                if asin not in already_scraped:
+                    already_scraped[asin] = set()
+                for review in reviews:
+                    already_scraped[asin].add(review['reviewer'])
+            
+            # Sauvegarder la progression
+            save_progress(i)
+            
+            # Pause aléatoire entre les requêtes pour éviter la détection
+            pause_time = random.uniform(5, 15)
+            logger.info(f"Pause de {pause_time:.2f} secondes avant le prochain produit.")
+            time.sleep(pause_time)
+            
+        except Exception as e:
+            logger.error(f"Erreur lors du traitement du produit à l'index {i}: {e}")
+            # Sauvegarder la progression même en cas d'erreur
+            save_progress(i)
+    
+    logger.info("Scraping terminé pour tous les produits!")
 
 if __name__ == "__main__":
     main()
