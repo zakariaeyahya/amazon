@@ -10,3 +10,4 @@ s3 = boto3.client(
 response = s3.list_objects_v2(Bucket='electronique2025', Prefix='web-mining-data/')
 for obj in response.get('Contents', []):
     print(obj['Key'])
+#add download_file(...) to download the data from S3
