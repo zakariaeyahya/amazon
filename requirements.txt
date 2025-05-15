@@ -1,5 +1,5 @@
 # Core Orchestration
-apache-airflow==2.7.2
+apache-airflow==2.9.2
 
 # Web Scraping
 selenium==4.9.1
@@ -24,7 +24,7 @@ ratelimit==2.2.1
 
 # Monitoring & Logging
 prometheus-client==0.17.1
-colorlog==6.7.0
+colorlog>=4.0.2,<5.0
 tqdm==4.66.1
 
 # Container Management
