@@ -347,6 +347,23 @@ class AmazonProductScraper:
 
         return success
 
+def run_full_scrape(max_pages=None):
+    """
+    Run a full scraping session for Amazon products.
+    
+    Args:
+        max_pages (int, optional): Maximum number of pages to scrape. Defaults to None.
+        
+    Returns:
+        bool: True if scraping completed successfully, False otherwise.
+    """
+    try:
+        scraper = AmazonProductScraper()
+        return scraper.run_scraping(max_pages=max_pages)
+    except Exception as e:
+        print(f"Error during scraping: {e}")
+        return False
+
 
 # Exemple d'utilisation
 if __name__ == "__main__":

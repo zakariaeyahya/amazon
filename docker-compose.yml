@@ -1,125 +1,95 @@
 version: '3.8'
 
 x-airflow-common: &airflow-common
-  # Utilise l'image construite à partir de votre Dockerfile personnalisé
   build:
-    context: . # Le contexte est la racine du projet 'amazon/'
-    dockerfile: ./docker/airflow/Dockerfile # Chemin vers votre Dockerfile Airflow
+    context: .
+    dockerfile: ./docker/airflow/Dockerfile
     args:
-      AIRFLOW_VERSION: ${AIRFLOW_VERSION_ARG:-2.9.2}
-  image: amazon_scraper_airflow_custom:latest # Nom de l'image construite
+      AIRFLOW_VERSION: 2.9.2
+  image: amazon_scraper_airflow_custom:latest
   environment:
-    # Variables d'environnement générales pour Airflow
     - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
-    - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY:?Variable AIRFLOW_FERNET_KEY non définie dans .env}
+    - AIRFLOW__CORE__FERNET_KEY=k6CpuyNfmTVlx6NSfe0Ly34M8P9s-q1exdjyXaJ4Cgc=
     - AIRFLOW__CORE__LOAD_EXAMPLES=false
-    - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true # Mettre à false si vous voulez que les nouveaux DAGs soient actifs immédiatement
+    - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
     - AIRFLOW__LOGGING__LOGGING_LEVEL=INFO
-    # Connexion à la base de données PostgreSQL
-    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
-    # Connexion à Redis pour Celery Broker
-    - AIRFLOW__CELERY__BROKER_URL=redis://:${REDIS_PASSWORD}@redis:${REDIS_PORT}/0
-    # Backend des résultats Celery (peut aussi être la base de données)
-    - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
-    # Connexion pour Selenium Grid (accessible via l'interface utilisateur d'Airflow ou directement dans les DAGs)
-    # Le format 'selenium://' est un type de connexion personnalisé que vous pourriez définir
-    # ou simplement utiliser l'URL directement dans vos opérateurs Selenium.
-    # %2F est l'encodage URL pour '/'. %3A pour ':'
-    - AIRFLOW_CONN_SELENIUM_GRID=selenium://?host=http%3A%2F%2Fselenium-hub%3A${SELENIUM_HUB_PORT}%2Fwd%2Fhub
-    # Variables pour le scraping
-    - PYTHONUNBUFFERED=1 # Pour un logging Python plus direct
+    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    - AIRFLOW__CELERY__BROKER_URL=redis://:airflow@redis:6379/0
+    - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres:5432/airflow
+    - AIRFLOW_CONN_SELENIUM_GRID=selenium://?host=http%3A%2F%2Fselenium-hub%3A4444%2Fwd%2Fhub
+    - PYTHONUNBUFFERED=1
   volumes:
     - ./airflow_dags:/opt/airflow/dags
-    - ./logs/airflow:/opt/airflow/logs # Logs spécifiques à Airflow
-    - ./logs/scrapers:/opt/airflow/logs/scrapers # Si vos scrapers écrivent dans un sous-dossier de logs
-    - ./data:/opt/airflow/data # Pour les données brutes/traitées
-    - ./config/scraping_config.yaml:/opt/airflow/config/scraping_config.yaml # Configuration spécifique au scraping
+    - ./logs/airflow:/opt/airflow/logs
+    - ./logs/scrapers:/opt/airflow/logs/scrapers
+    - ./data:/opt/airflow/data
+    - ./config/scraping_config.yaml:/opt/airflow/config/scraping_config.yaml
+    - ./scrapers:/opt/airflow/scrapers
   depends_on:
     postgres:
       condition: service_healthy
     redis:
       condition: service_healthy
-  user: "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-0}" # Exécute les conteneurs avec l'UID/GID de l'hôte
+  user: "50000:0"
   restart: unless-stopped
 
 services:
   postgres:
-    image: postgres:13-alpine # Ou une version plus récente si souhaité
+    image: postgres:13-alpine
     environment:
-      - POSTGRES_USER=${POSTGRES_USER:?Variable POSTGRES_USER non définie dans .env}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Variable POSTGRES_PASSWORD non définie dans .env}
-      - POSTGRES_DB=${POSTGRES_DB:?Variable POSTGRES_DB non définie dans .env}
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
     ports:
-      - "${POSTGRES_PORT}:5432"
+      - "5432:5432"
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}", "-d", "${POSTGRES_DB}"]
+      test: ["CMD", "pg_isready", "-U", "airflow", "-d", "airflow"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
 
   redis:
-    image: redis:6.2-alpine # Ou une version plus récente
-    command: redis-server --requirepass ${REDIS_PASSWORD} # Définir si REDIS_PASSWORD est utilisé
+    image: redis:6.2-alpine
+    command: redis-server --requirepass airflow
     ports:
-      - "${REDIS_PORT}:6379"
+      - "6379:6379"
     volumes:
       - redis-data-volume:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"] # Adapter si pas de mot de passe
+      test: ["CMD", "redis-cli", "-a", "airflow", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
 
-  # Service d'initialisation d'Airflow (migrations DB, création utilisateur admin)
   airflow-init:
     <<: *airflow-common
     container_name: airflow_init_container
     entrypoint: /bin/bash
-    # Le script d'entrée de l'image de base apache/airflow gère `airflow db upgrade`.
-    # Nous ajoutons la création de l'utilisateur.
-    # Note: airflow users create a besoin que la DB soit initialisée.
-    # L'entrypoint de l'image de base s'en charge avant d'exécuter le CMD.
-    # Nous attendons un peu pour s'assurer que `airflow db upgrade` a eu le temps de s'exécuter
-    # (ou on pourrait créer un script plus robuste).
     command:
       - -c
       - |
         set -e
-        # Attendre que airflow db upgrade (via entrypoint) ait potentiellement terminé
-        # Une meilleure approche serait un script qui vérifie explicitement
-        # l'état de la migration avant de créer l'utilisateur.
-        # L'entrypoint standard de l'image Airflow exécute airflow db upgrade.
-        # Nous devons donc nous assurer que cela est fait avant de créer l'utilisateur.
-        # Pour simplifier, on peut juste lancer la commande de création d'utilisateur
-        # en espérant que l'initialisation de la DB par l'entrypoint est terminée.
-        # Un sleep prudent :
-        # sleep 15
         airflow users create \
-          --username ${AIRFLOW_ADMIN_USER:-admin} \
-          --password ${AIRFLOW_ADMIN_PASSWORD:-admin} \
+          --username admin \
+          --password admin \
           --firstname Admin \
           --lastname User \
-          --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com} \
+          --email admin@example.com \
           --role Admin || echo "Admin user already exists or failed to create."
-    # Pas besoin de `user:` ici si les commandes s'exécutent en tant que root pour `users create` si nécessaire,
-    # mais l'image de base passe à l'utilisateur airflow.
-    # Si `airflow users create` ne fonctionne pas à cause des permissions,
-    # il faudrait l'exécuter en tant que root ou ajuster les permissions dans l'image.
-    # Cependant, cela devrait fonctionner avec l'utilisateur airflow par défaut.
-    restart: on-failure # Ne redémarre que si la commande échoue
+    restart: on-failure
 
   airflow-webserver:
     <<: *airflow-common
-    command: airflow webserver # Commande pour démarrer le serveur web
+    command: airflow webserver
     ports:
-      - "8080:8080" # Accès à l'interface utilisateur Airflow
+      - "8080:8080"
     depends_on:
       airflow-init:
-        condition: service_completed_successfully # Attend que airflow-init ait terminé avec succès
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "curl --fail http://localhost:8080/health"]
       interval: 30s
@@ -128,7 +98,7 @@ services:
 
   airflow-scheduler:
     <<: *airflow-common
-    command: airflow scheduler # Commande pour démarrer le planificateur
+    command: airflow scheduler
     depends_on:
       airflow-init:
         condition: service_completed_successfully
@@ -140,73 +110,46 @@ services:
 
   airflow-worker:
     <<: *airflow-common
-    command: airflow celery worker # Commande pour démarrer un worker Celery
+    command: airflow celery worker
     depends_on:
       airflow-init:
         condition: service_completed_successfully
-    # Vous pouvez augmenter le nombre de workers en utilisant --scale
-    # exemple: docker-compose up --scale airflow-worker=3 -d
-    healthcheck: # Un healthcheck simple pour un worker est plus difficile
-      test: ["CMD-SHELL", "airflow celery status | grep OK"] # Vérifie si le worker est connecté à Celery
+    healthcheck:
+      test: ["CMD-SHELL", "airflow celery status | grep OK"]
       interval: 60s
       timeout: 30s
       retries: 5
 
-  # Optionnel : Flower pour monitorer les workers Celery
   flower:
-    <<: *airflow-common # Réutilise la même image et la plupart des configs
-    command: airflow celery flower # Commande pour démarrer Flower
+    <<: *airflow-common
+    command: airflow celery flower
     ports:
-      - "5555:5555" # Accès à l'interface Flower
+      - "5555:5555"
     depends_on:
       airflow-init:
-        condition: service_completed_successfully # Ou dépendre directement de redis et postgres
+        condition: service_completed_successfully
 
-  # --- Selenium Grid ---
   selenium-hub:
-    image: selenium/hub:4.20.0 # Utilisez la version la plus récente de Selenium 4
+    image: selenium/hub:4.20.0
     ports:
-      - "${SELENIUM_HUB_PORT:-4444}:${SELENIUM_HUB_PORT:-4444}" # Port pour les commandes Selenium
-      # - "4442:4442" # Event Bus
-      # - "4443:4443" # New Session Queue
+      - "4444:4444"
     environment:
-      # Options pour la grille, par exemple :
       - SE_OPTS=--session-request-timeout 300 --session-retry-interval 5 --session-queue-size 100
     restart: unless-stopped
 
-  # Nœud Chrome pour Selenium Grid
-  # Vous pouvez en ajouter plusieurs ou utiliser d'autres navigateurs (firefox)
   chrome-node:
     image: selenium/node-chrome:4.20.0
-    shm_size: '2gb' # Taille de la mémoire partagée, important pour Chrome
+    shm_size: '2gb'
     depends_on:
       - selenium-hub
     environment:
       - SE_EVENT_BUS_HOST=selenium-hub
       - SE_EVENT_BUS_PUBLISH_PORT=4442
       - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
-      # - SCREEN_WIDTH=1920 # Optionnel
-      # - SCREEN_HEIGHT=1080 # Optionnel
-      # Définir le nombre de sessions simultanées par nœud
       - SE_NODE_MAX_SESSIONS=5
       - SE_NODE_OVERRIDE_MAX_SESSIONS=true
-    # Vous pouvez monter un volume pour les téléchargements si nécessaire
-    # volumes:
-    #   - ./downloads:/home/seluser/Downloads
     restart: unless-stopped
-
-  # Exemple de nœud Firefox (si nécessaire)
-  # firefox-node:
-  #   image: selenium/node-firefox:4.20.0
-  #   shm_size: '2gb'
-  #   depends_on:
-  #     - selenium-hub
-  #   environment:
-  #     - SE_EVENT_BUS_HOST=selenium-hub
-  #     - SE_EVENT_BUS_PUBLISH_PORT=4442
-  #     - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
-  #   restart: unless-stopped
 
 volumes:
   postgres-db-volume:
-  redis-data-volume: # Optionnel, Redis est souvent utilisé comme cache/broker non persistant
+  redis-data-volume:

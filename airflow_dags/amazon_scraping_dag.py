@@ -25,11 +25,9 @@ from scrapers.scraping import run_full_scrape
 from scrapers.categories import scrape_categories
 from scrapers.amazon_details_scraper import scrape_product_details
 from scrapers.commentaire import scrape_reviews
-from scrapers.next_page import handle_pagination
 from utils.file_utils import merge_csv_files, clean_data, export_to_json
 from utils.scraping_logger import get_logger, scraper_logger
 from utils.scraping_metrics import metrics, time_operation
-from airflow_dags.sensors.amazon_product_sensor import AmazonProductSensor
 
 # Configure logger
 logger = get_logger('airflow_dag')
@@ -474,6 +472,37 @@ Categories: {run_config['output_files']['categories']}
         logger.error(f"Error generating report: {str(e)}")
         raise
 
+@logger.airflow_task_logger('run_full_scraping')
+@time_operation('full_scrape')
+def execute_full_scrape(**kwargs):
+    """Execute the full scraping process using run_full_scrape."""
+    try:
+        ti = kwargs['ti']
+        run_config = ti.xcom_pull(task_ids='prepare_scraping', key='run_config')
+        
+        logger.info("Starting full scraping process")
+        
+        # Start metrics
+        metrics.start_timer('full_scrape')
+        
+        # Run the full scraping process
+        success = run_full_scrape(max_pages=run_config['max_pages_per_category'])
+        
+        # Record time and success
+        elapsed = metrics.stop_timer('full_scrape', 'full_scrape')
+        if success:
+            metrics.increment('full_scrape.completed')
+            logger.info(f"Full scraping completed successfully in {elapsed:.2f}s")
+        else:
+            metrics.record_error('full_scrape')
+            logger.error("Full scraping failed")
+        
+        return success
+    except Exception as e:
+        metrics.record_error('full_scrape')
+        logger.error(f"Error in full scraping: {str(e)}")
+        raise
+
 # Define the tasks
 check_env = PythonOperator(
     task_id='check_environment',
@@ -484,6 +513,13 @@ check_env = PythonOperator(
 prepare = PythonOperator(
     task_id='prepare_scraping',
     python_callable=prepare_scraping,
+    dag=dag,
+)
+
+# Add the full scraping task
+full_scrape = PythonOperator(
+    task_id='run_full_scraping',
+    python_callable=execute_full_scrape,
     dag=dag,
 )
 
@@ -524,7 +560,7 @@ report = PythonOperator(
 )
 
 # Define task dependencies
-check_env >> prepare >> category_group >> product_details >> reviews >> post_process >> report
+check_env >> prepare >> [full_scrape, category_group] >> product_details >> reviews >> post_process >> report
 
 # Add this at the end to ensure metrics are saved when the DAG completes
 completion = DummyOperator(
