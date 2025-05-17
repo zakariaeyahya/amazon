@@ -321,6 +321,44 @@ def save_reviews_to_csv(reviews, output_file):
         logger.error(f"Erreur lors de la sauvegarde des avis: {e}")
         return False
 
+def scrape_reviews(url, max_reviews=50):
+    """
+    Scrape reviews for a single Amazon product.
+    
+    Args:
+        url (str): The URL of the Amazon product page.
+        max_reviews (int): Maximum number of reviews to scrape.
+        
+    Returns:
+        list: A list of dictionaries containing review data.
+    """
+    try:
+        # Extract ASIN from URL
+        asin = extract_asin_from_url(url)
+        if not asin:
+            logger.error(f"Could not extract ASIN from URL: {url}")
+            return []
+            
+        # Extract title from URL (basic version)
+        title = url.split('/')[-1].replace('-', ' ').title()
+        
+        # Load already scraped reviews
+        already_scraped = load_already_scraped_reviews()
+        already_scraped_reviewers = already_scraped.get(asin, set())
+        
+        # Scrape reviews
+        reviews = scrape_amazon_product_info(url, asin, title, already_scraped_reviewers)
+        
+        # Limit the number of reviews if needed
+        if max_reviews and len(reviews) > max_reviews:
+            reviews = reviews[:max_reviews]
+            
+        return reviews
+        
+    except Exception as e:
+        logger.error(f"Error scraping reviews: {e}")
+        return []
+
 def main():
     """Fonction principale d'exécution."""
     # Créer le répertoire de données si nécessaire

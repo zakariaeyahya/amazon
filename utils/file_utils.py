@@ -350,3 +350,88 @@ def incremental_update(
     except Exception as e:
         logger.error(f"Error performing incremental update: {e}")
         return False
+
+def clean_data(input_file: str, output_file: Optional[str] = None) -> bool:
+    """
+    Clean and standardize data in a CSV file.
+    
+    Args:
+        input_file: Path to the input CSV file
+        output_file: Path to the output CSV file (if None, overwrites input file)
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        if not os.path.exists(input_file):
+            logger.error(f"Input file does not exist: {input_file}")
+            return False
+            
+        with file_lock(input_file):
+            # Read the CSV file
+            df = pd.read_csv(input_file, encoding='utf-8')
+            
+            # Clean column names
+            df.columns = [col.strip().lower().replace(' ', '_') for col in df.columns]
+            
+            # Remove duplicate rows
+            df = df.drop_duplicates()
+            
+            # Clean string columns
+            for col in df.select_dtypes(include=['object']).columns:
+                df[col] = df[col].astype(str).str.strip()
+                # Replace empty strings with NaN
+                df[col] = df[col].replace('', pd.NA)
+            
+            # Clean numeric columns
+            for col in df.select_dtypes(include=['float64', 'int64']).columns:
+                # Replace negative values with NaN
+                df.loc[df[col] < 0, col] = pd.NA
+            
+            # Remove rows where all values are NaN
+            df = df.dropna(how='all')
+            
+            # Save the cleaned data
+            output_path = output_file if output_file else input_file
+            df.to_csv(output_path, index=False, encoding='utf-8')
+            
+            logger.info(f"Data cleaned and saved to {output_path}")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Error cleaning data in {input_file}: {e}")
+        return False
+
+def export_to_json(input_file: str, output_file: str) -> bool:
+    """
+    Export CSV data to JSON format.
+    
+    Args:
+        input_file: Path to the input CSV file
+        output_file: Path to the output JSON file
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        if not os.path.exists(input_file):
+            logger.error(f"Input file does not exist: {input_file}")
+            return False
+            
+        with file_lock(input_file):
+            # Read the CSV file
+            df = pd.read_csv(input_file, encoding='utf-8')
+            
+            # Convert to JSON
+            data = df.to_dict('records')
+            
+            # Save as JSON
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"Data exported to JSON: {output_file}")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Error exporting to JSON: {e}")
+        return False
