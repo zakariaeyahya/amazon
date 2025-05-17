@@ -14,8 +14,8 @@ def upload_files_to_s3(local_base_path, s3_bucket_name, s3_prefix=""):
     # Configuration AWS - remplacez avec vos propres identifiants
     s3_client = boto3.client(
         's3',
-        aws_access_key_id='AKIAT3W73OPXZVPLYW6A',
-        aws_secret_access_key='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',
+        aws_access_key_id='',
+        aws_secret_access_key='',
         region_name='eu-north-1'
     )
     
@@ -101,8 +101,8 @@ if __name__ == "__main__":
     local_data_path = r"D:\bureau\BD&AI 1\ci2\S2\web_mining\comment\data"
     
     # Configuration S3
-    s3_bucket = "electronique2025"  # Bucket modifié selon votre spécification
-    s3_folder = "web-mining-data"   # dossier virtuel dans S3
+    s3_bucket = ""  # Bucket modifié selon votre spécification
+    s3_folder = ""   # dossier virtuel dans S3
     
     # Lancer le téléchargement
     upload_files_to_s3(local_data_path, s3_bucket, s3_folder)
