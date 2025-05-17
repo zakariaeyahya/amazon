@@ -4,9 +4,16 @@ import json
 import time
 import re
 
-def scrape_amazon_filters():
+def scrape_amazon_filters(category=None, max_pages=5, max_products=100, output_file='amazon_filters.json'):
     # URL de la page Amazon à scraper
-    url = "https://www.amazon.co.uk/s?i=computers&rh=n%3A429886031&s=popularity-rank&fs=true"
+    base_url = "https://www.amazon.co.uk/s"
+    params = {
+        'i': category if category else 'computers',
+        'rh': 'n%3A429886031',
+        's': 'popularity-rank',
+        'fs': 'true'
+    }
+    url = f"{base_url}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
     
     # En-têtes pour imiter un navigateur (nécessaire pour éviter les blocages)
     headers = {
@@ -18,7 +25,7 @@ def scrape_amazon_filters():
     
     try:
         # Faire la requête HTTP
-        print("Envoi de la requête à Amazon UK...")
+        print(f"Envoi de la requête à Amazon UK pour la catégorie {category}...")
         response = requests.get(url, headers=headers)
         response.raise_for_status()
         print("Requête réussie, analyse du HTML...")
@@ -27,7 +34,11 @@ def scrape_amazon_filters():
         soup = BeautifulSoup(response.content, 'html.parser')
         
         # Dictionnaire pour stocker toutes les catégories et leurs valeurs
-        filtered_data = {}
+        filtered_data = {
+            'category': category,
+            'product_urls': [],
+            'filters': {}
+        }
         
         # Trouver tous les titres de catégories avec la classe spécifique
         category_titles = soup.find_all('span', class_='a-size-base a-color-base puis-bold-weight-text')
@@ -66,9 +77,6 @@ def scrape_amazon_filters():
             if i < len(filter_sections) - 1:
                 next_section = filter_sections[i + 1]['section']
             
-            # Trouver les éléments entre cette section et la suivante
-            current = section
-            
             # Chercher d'abord la liste ul qui contient les valeurs
             ul_element = None
             # Parcourir les éléments suivants de la section actuelle
@@ -104,7 +112,6 @@ def scrape_amazon_filters():
                             
                             try:
                                 # Utiliser regex pour extraire les paramètres
-                                # Exemple: rh=n%3A429886031%2Cp_123%3A219979
                                 if 'rh=' in value_url:
                                     rh_part = value_url.split('rh=')[1].split('&')[0]
                                     # Convertir les caractères encodés
@@ -139,13 +146,13 @@ def scrape_amazon_filters():
             
             # Ajouter les valeurs à la catégorie
             if category_values:
-                filtered_data[category_name] = category_values
+                filtered_data['filters'][category_name] = category_values
         
         # Enregistrer les résultats dans un fichier JSON
-        with open('amazon_filters.json', 'w', encoding='utf-8') as f:
+        with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(filtered_data, f, indent=4, ensure_ascii=False)
         
-        print("\nLes données ont été enregistrées dans 'amazon_filters.json'")
+        print(f"\nLes données ont été enregistrées dans '{output_file}'")
         
         # Afficher le JSON dans la console pour vérification
         print("\nPrévisualisation du JSON:")

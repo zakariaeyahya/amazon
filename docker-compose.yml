@@ -25,6 +25,7 @@ x-airflow-common: &airflow-common
     - ./data:/opt/airflow/data
     - ./config/scraping_config.yaml:/opt/airflow/config/scraping_config.yaml
     - ./scrapers:/opt/airflow/scrapers
+    - ./utils:/opt/airflow/utils
   depends_on:
     postgres:
       condition: service_healthy
