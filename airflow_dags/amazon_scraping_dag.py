@@ -13,7 +13,6 @@ from airflow.models import Variable
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.exceptions import AirflowSkipException
-from airflow.utils.retries import RetryHandler
 from airflow.utils.session import create_session
 from airflow.models.taskinstance import TaskInstance
 
