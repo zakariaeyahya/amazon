@@ -98,7 +98,7 @@ def upload_files_to_s3(local_base_path, s3_bucket_name, s3_prefix=""):
 
 if __name__ == "__main__":
     # Chemin local des données - modifié selon votre spécification
-    local_data_path = r"data"
+    local_data_path = r"D:\bureau\BD&AI 1\ci2\S2\web_mining\comment\data"
     
     # Configuration S3
     s3_bucket = ""  # Bucket modifié selon votre spécification
