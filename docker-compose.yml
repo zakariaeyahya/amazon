@@ -9,7 +9,7 @@ x-airflow-common: &airflow-common
   image: amazon_scraper_airflow_custom:latest
   environment:
     - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
-    - AIRFLOW__CORE__FERNET_KEY=k6CpuyNfmTVlx6NSfe0Ly34M8P9s-q1exdjyXaJ4Cgc=
+    - AIRFLOW__CORE__FERNET_KEY="your fenet key"
     - AIRFLOW__CORE__LOAD_EXAMPLES=false
     - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
     - AIRFLOW__LOGGING__LOGGING_LEVEL=INFO
