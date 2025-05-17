@@ -202,6 +202,42 @@ class AmazonDetailsScraper:
 
         return success
 
+def scrape_product_details(url):
+    """
+    Extract product details from a single Amazon product URL.
+    
+    Args:
+        url (str): The URL of the Amazon product page.
+        
+    Returns:
+        dict: A dictionary containing the product details.
+    """
+    try:
+        # Create a temporary instance of the scraper
+        scraper = AmazonDetailsScraper()
+        
+        # Extract ASIN from URL
+        asin = None
+        if '/dp/' in url:
+            asin = url.split('/dp/')[1].split('/')[0]
+        elif '/gp/product/' in url:
+            asin = url.split('/gp/product/')[1].split('/')[0]
+        
+        if not asin:
+            print(f"Could not extract ASIN from URL: {url}")
+            return None
+            
+        # Extract title from URL (basic version)
+        title = url.split('/')[-1].replace('-', ' ').title()
+        
+        # Extract technical details
+        details = scraper.extract_technical_details(url, asin, title)
+        
+        return details
+        
+    except Exception as e:
+        print(f"Error scraping product details: {e}")
+        return None
 
 # Exemple d'utilisation
 if __name__ == "__main__":

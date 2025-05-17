@@ -1,198 +1,156 @@
 version: '3.8'
 
-services:
-  # Airflow webserver and scheduler
-  airflow:
-    build:
-      context: ./docker/airflow
-      dockerfile: Dockerfile
-    image: amazon-scraper-airflow:latest
-    container_name: amazon-scraper-airflow
-    env_file: .env
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
-      - AIRFLOW__CORE__FERNET_KEY=k6CpuyNfmTVlx6NSfe0Ly34M8P9s-q1exdjyXaJ4Cgc=
-      - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
-      - AIRFLOW__WEBSERVER__BASE_URL=http://localhost:8080
-      - AIRFLOW__WEBSERVER__AUTHENTICATE=True
-      - AIRFLOW__WEBSERVER__AUTH_BACKEND=airflow.api.auth.backend.basic_auth
-      - AIRFLOW__WEBSERVER__SECRET_KEY=k6CpuyNfmTVlx6NSfe0Ly34M8P9s-q1exdjyXaJ4Cgc=
-      - AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL=60
-      - AIRFLOW__CELERY__BROKER_URL=redis://redis:6379/0
-      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=False
-      - AIRFLOW__CORE__PARALLELISM=4
-      - AIRFLOW__CORE__DAG_CONCURRENCY=2
-      - AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG=1
-      - AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT=60
-      # User creation variables
-      - _AIRFLOW_WWW_USER_CREATE=true
-      - _AIRFLOW_WWW_USER_USERNAME=admin
-      - _AIRFLOW_WWW_USER_PASSWORD=admin123
-    volumes:
-      - ./airflow_dags:/opt/airflow/dags
-      - ./config/airflow.cfg:/opt/airflow/airflow.cfg:ro
-      - ./config/webserver_config.py:/opt/airflow/webserver_config.py:ro
-      - ./config/scraping_config.yaml:/opt/airflow/config/scraping_config.yaml:ro
-      - ./data:/opt/airflow/data
-      - ./logs/airflow:/opt/airflow/logs
-      - ./plugins:/opt/airflow/plugins
-      - ./scrapers:/opt/airflow/scrapers
-      - ./utils:/opt/airflow/utils
-      - ./tests:/opt/airflow/tests
-    ports:
-      - "8080:8080"
-    depends_on:
-      - postgres
-      - redis
-    healthcheck:
-      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname $(hostname)"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    restart: unless-stopped
-    networks:
-      - scraper-network
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 4G
-        reservations:
-          cpus: '0.5'
-          memory: 1G
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: ./docker/airflow/Dockerfile
+    args:
+      AIRFLOW_VERSION: 2.9.2
+  image: amazon_scraper_airflow_custom:latest
+  environment:
+    - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+    - AIRFLOW__CORE__FERNET_KEY=k6CpuyNfmTVlx6NSfe0Ly34M8P9s-q1exdjyXaJ4Cgc=
+    - AIRFLOW__CORE__LOAD_EXAMPLES=false
+    - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
+    - AIRFLOW__LOGGING__LOGGING_LEVEL=INFO
+    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    - AIRFLOW__CELERY__BROKER_URL=redis://:airflow@redis:6379/0
+    - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres:5432/airflow
+    - AIRFLOW_CONN_SELENIUM_GRID=selenium://?host=http%3A%2F%2Fselenium-hub%3A4444%2Fwd%2Fhub
+    - PYTHONUNBUFFERED=1
+  volumes:
+    - ./airflow_dags:/opt/airflow/dags
+    - ./logs/airflow:/opt/airflow/logs
+    - ./logs/scrapers:/opt/airflow/logs/scrapers
+    - ./data:/opt/airflow/data
+    - ./config/scraping_config.yaml:/opt/airflow/config/scraping_config.yaml
+    - ./scrapers:/opt/airflow/scrapers
+    - ./utils:/opt/airflow/utils
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  user: "50000:0"
+  restart: unless-stopped
 
-  # Database for Airflow metadata
+services:
   postgres:
-    image: postgres:13
-    container_name: amazon-scraper-postgres
+    image: postgres:13-alpine
     environment:
       - POSTGRES_USER=airflow
       - POSTGRES_PASSWORD=airflow
       - POSTGRES_DB=airflow
-    volumes:
-      - postgres-db-volume:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
-      interval: 5s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - scraper-network
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 2G
-
-  # Redis for celery and caching
-  redis:
-    image: redis:latest
-    container_name: amazon-scraper-redis
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      test: ["CMD", "pg_isready", "-U", "airflow", "-d", "airflow"]
+      interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
-    networks:
-      - scraper-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1G
 
-  # Selenium grid for browser automation
-  selenium:
-    build:
-      context: ./docker/selenium
-      dockerfile: Dockerfile
-    image: amazon-scraper-selenium:latest
-    container_name: amazon-scraper-selenium
-    environment:
-      - SE_NODE_MAX_SESSIONS=4
-      - SE_NODE_OVERRIDE_MAX_SESSIONS=true
-      - SE_NODE_SESSION_TIMEOUT=300
+  redis:
+    image: redis:6.2-alpine
+    command: redis-server --requirepass airflow
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data-volume:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "airflow", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow_init_container
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -e
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname User \
+          --email admin@example.com \
+          --role Admin || echo "Admin user already exists or failed to create."
+    restart: on-failure
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: airflow webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: airflow scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname $(hostname) --limit 1 | grep \"is_alive: True\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  airflow-worker:
+    <<: *airflow-common
+    command: airflow celery worker
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "airflow celery status | grep OK"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+
+  flower:
+    <<: *airflow-common
+    command: airflow celery flower
+    ports:
+      - "5555:5555"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  selenium-hub:
+    image: selenium/hub:4.20.0
     ports:
       - "4444:4444"
-      - "7900:7900" # noVNC port for browser viewing
-    volumes:
-      - ./data:/data
-      - ./logs/selenium:/var/log/selenium
-    shm_size: 2gb # Shared memory for browser stability
-    restart: unless-stopped
-    networks:
-      - scraper-network
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 4G
-
-  # Prometheus for metrics collection
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: amazon-scraper-prometheus
-    volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus-data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-    ports:
-      - "9090:9090"
-    restart: unless-stopped
-    networks:
-      - scraper-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1G
-
-  # Grafana for metrics visualization
-  grafana:
-    image: grafana/grafana:latest
-    container_name: amazon-scraper-grafana
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./config/grafana/provisioning:/etc/grafana/provisioning
-      - ./config/grafana/dashboards:/var/lib/grafana/dashboards
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_INSTALL_PLUGINS=grafana-piechart-panel
-    ports:
-      - "3000:3000"
-    depends_on:
-      - prometheus
+      - SE_OPTS=--session-request-timeout 300 --session-retry-interval 5 --session-queue-size 100
     restart: unless-stopped
-    networks:
-      - scraper-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1G
+
+  chrome-node:
+    image: selenium/node-chrome:4.20.0
+    shm_size: '2gb'
+    depends_on:
+      - selenium-hub
+    environment:
+      - SE_EVENT_BUS_HOST=selenium-hub
+      - SE_EVENT_BUS_PUBLISH_PORT=4442
+      - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
+      - SE_NODE_MAX_SESSIONS=5
+      - SE_NODE_OVERRIDE_MAX_SESSIONS=true
+    restart: unless-stopped
 
 volumes:
   postgres-db-volume:
-  prometheus-data:
-  grafana-data:
-
-networks:
-  scraper-network:
-    driver: bridge
-    ipam:
-      driver: default
-      config:
-        - subnet: 172.28.0.0/16
+  redis-data-volume:
