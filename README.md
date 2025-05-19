@@ -1,5 +1,4 @@
-Pour ajouter du code HTML et CSS à votre fichier README sur GitHub, vous pouvez utiliser des balises HTML directement dans le fichier Markdown. Voici comment vous pouvez intégrer des styles CSS et du contenu HTML dans votre README :
-
+ 
 ```markdown
 # Plateforme d'Extraction et d'Analyse de Produits Amazon
 
