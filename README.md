@@ -82,7 +82,7 @@ snowflake-connector-python>=2.7.0
 
 ```bash
 # Clonage du référentiel
-git clone <repository-url>
+git clone https://github.com/zakariaeyahya/amazon.git
 cd amazon-scraping
 
 # Configuration de l'environnement virtuel
@@ -284,52 +284,6 @@ SET disque_dur =
 - Auditer régulièrement les logs d'accès
 - Chiffrer les données sensibles lors du stockage et du transit
 
-## 📈 Performance et optimisation
-
-### Métriques clés
-
-| Métrique | Valeur typique |
-|----------|----------------|
-| Vitesse d'extraction | ~5-10 produits/minute |
-| Consommation mémoire | 200-500 MB |
-| Taux de succès | 95-98% |
-| Débit réseau | ~1-5 MB/s |
-
-### Recommandations d'optimisation
-- Ajustez `travailleurs_max` selon les ressources disponibles
-- Augmentez progressivement `requetes_par_seconde` pour trouver l'équilibre optimal
-- Utilisez un pool de proxies de haute qualité
-- Configurez une rotation d'agents utilisateurs diversifiée
-- Implémentez le caching des requêtes pour réduire la charge
-
-> **Conseil:** Pour des volumes importants, considérez l'utilisation d'un cluster Kubernetes pour le déploiement d'Airflow.
-
-## 🔮 Développements futurs
-
-- **Intégration NLP:** Traitement avancé des avis clients par analyse de sentiment et extraction d'entités
-- **Surveillance des prix:** Suivi historique et alertes sur les variations de prix
-- **API REST:** Exposition des données via une API REST pour faciliter l'intégration avec d'autres systèmes
-
-## 📊 Visualisation des données
-
-### Tableau de bord intégré
-```bash
-# Installation de Streamlit
-pip install streamlit
-
-# Lancement du tableau de bord
-cd amazon-analytics
-streamlit run dashboard/main.py
-```
-
-### Intégration BI externe
-Les données peuvent être facilement connectées à des outils BI externes comme:
-- Tableau
-- Power BI
-- Looker
-- Mode Analytics
-
-Utilisez les connecteurs Snowflake natifs disponibles dans ces plateformes.
 
 ## 📜 Licence
 
