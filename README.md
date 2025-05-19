@@ -270,21 +270,6 @@ SET disque_dur =
 - S'assurer que l'adresse IP est autorisée
 - Tester la connexion avec une requête simple
 
-## 🔒 Sécurité et conformité
-
-⚠️ **Important:** Ce projet est conçu pour un usage professionnel et éducatif. L'utilisation doit être conforme aux:
-- Conditions d'utilisation d'Amazon
-- Directives du fichier robots.txt
-- Réglementations en vigueur sur la protection des données
-
-### Bonnes pratiques de sécurité
-- Ne jamais stocker les identifiants en clair dans le code
-- Utiliser des variables d'environnement ou un gestionnaire de secrets
-- Implémenter une politique de limitation de requêtes raisonnable
-- Auditer régulièrement les logs d'accès
-- Chiffrer les données sensibles lors du stockage et du transit
-
-
 ## 📜 Licence
 
 Ce projet est distribué sous [licence MIT](LICENSE).
