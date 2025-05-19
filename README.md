@@ -6,7 +6,7 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 > Architecture distribuée d'extraction et d'analyse de données e-commerce optimisée pour Amazon, construite sur Python et Apache Airflow avec intégration Snowflake.
-![Uploading data_pipeline_svg.svg…]()
+![Capture d’écran_19-5-2025_205939_](https://github.com/user-attachments/assets/62fb053a-24ce-4501-ae44-25522aca7262)
 
 ## 🔍 Présentation
 
