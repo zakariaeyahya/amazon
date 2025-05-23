@@ -27,10 +27,10 @@ from typing import List, Dict, Any
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 # Import our custom modules
-from scrapers.scraping import run_full_scrape
-from scrapers.categories import scrape_amazon_filters
-from scrapers.amazon_details_scraper import scrape_product_details
-from scrapers.commentaire import scrape_reviews
+from extraction.scraping import run_full_scrape
+from extraction.categories import scrape_amazon_filters
+from extraction.amazon_details_scraper import scrape_product_details
+from extraction.commentaire import scrape_reviews
 from utils.file_utils import merge_csv_files, clean_data, export_to_json
 from utils.scraping_logger import get_logger, scraper_logger
 from utils.scraping_metrics import metrics, time_operation
