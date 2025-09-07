@@ -1,74 +1,69 @@
-# 🚀 Plateforme d'Extraction et d'Analyse de Produits Amazon
-
+# 🚀 Amazon Product Extraction and Analysis Platform
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![Airflow](https://img.shields.io/badge/Airflow-2.5.0%2B-red)
 ![Snowflake](https://img.shields.io/badge/Snowflake-Ready-9cf)
 ![License](https://img.shields.io/badge/License-MIT-green)
+> A distributed e-commerce data extraction and analysis architecture optimized for Amazon, built on Python and Apache Airflow with Snowflake integration.
 
-> Architecture distribuée d'extraction et d'analyse de données e-commerce optimisée pour Amazon, construite sur Python et Apache Airflow avec intégration Snowflake.
 ![image](https://github.com/user-attachments/assets/07cdaade-045a-42b3-b941-ee4dc6c1fc45)
 
-## 🔍 Présentation
+## 🔍 Overview
+This platform enables the extraction and analysis of product data from Amazon, offering a comprehensive and high-performance solution through a distributed and scalable architecture.
 
-Cette plateforme permet l'extraction et l'analyse de données produits depuis Amazon, en offrant une solution complète et performante grâce à une architecture distribuée et scalable.
+**Key Capabilities:**
+- Multi-category collection with parallel processing
+- Comprehensive extraction of product metadata, taxonomy, and user reviews
+- Advanced anti-blocking systems
+- Complete analysis pipeline via Snowflake
 
-**Capacités principales:**
-- Collecte multi-catégories avec traitement parallélisé
-- Extraction exhaustive des métadonnées produits, taxonomie et avis utilisateurs
-- Systèmes anti-blocage avancés
-- Pipeline d'analyse complet via Snowflake
-
-## 📋 Table des matières
-
-- [Fonctionnalités](#-fonctionnalités)
-- [Prérequis](#-prérequis)
+## 📋 Table of Contents
+- [Features](#-features)
+- [Prerequisites](#-prerequisites)
 - [Installation](#-installation)
 - [Architecture](#-architecture)
 - [Configuration](#-configuration)
-- [Pipeline d'exécution](#-pipeline-dexécution)
-- [Modèle de données](#-modèle-de-données)
-- [Exemples d'utilisation](#-exemples-dutilisation)
-- [Résolution des problèmes](#-résolution-des-problèmes)
-- [Sécurité et conformité](#-sécurité-et-conformité)
-- [Performance](#-performance-et-optimisation)
-- [Développements futurs](#-développements-futurs)
-- [Licence](#-licence)
+- [Execution Pipeline](#-execution-pipeline)
+- [Data Model](#-data-model)
+- [Usage Examples](#-usage-examples)
+- [Troubleshooting](#-troubleshooting)
+- [Security and Compliance](#-security-and-compliance)
+- [Performance](#-performance-and-optimization)
+- [Future Developments](#-future-developments)
+- [License](#-license)
 
-## ✨ Fonctionnalités
+## ✨ Features
 
-### 🔍 Extraction de données
-- **Collecte multi-catégories**: Système optimisé pour extraire des données de plusieurs catégories Amazon simultanément
-- **Extraction exhaustive**:
-  - Métadonnées produits (identifiants, prix, spécifications)
-  - Taxonomie des catégories et systèmes de filtrage
-  - Données utilisateurs (avis, évaluations)
-- **Anti-blocage avancé**:
-  - Gestion intelligente du throttling avec backoff exponentiel
-  - Rotation d'agents utilisateurs et proxies
-  - Modulation dynamique des taux de requêtes
+### 🔍 Data Extraction
+- **Multi-category Collection:** Optimized system to extract data from multiple Amazon categories simultaneously
+- **Comprehensive Extraction:**
+  - Product metadata (IDs, prices, specifications)
+  - Category taxonomy and filtering systems
+  - User data (reviews, ratings)
+- **Advanced Anti-blocking:**
+  - Intelligent throttling management with exponential backoff
+  - User agent and proxy rotation
+  - Dynamic request rate modulation
 
-### ⚙️ Traitement et pipeline
-- **Orchestration via Apache Airflow**: Gestion complète du workflow avec DAGs configurables
-- **Parallélisation optimisée**: Utilisation de ThreadPoolExecutor pour maximiser l'efficacité
-- **Exportation multi-formats**: Support des formats CSV et JSON avec validation structurelle
-- **Observabilité intégrée**: Système complet de métriques, logs structurés et rapports d'exécution
+### ⚙️ Processing and Pipeline
+- **Orchestration via Apache Airflow:** Complete workflow management with configurable DAGs
+- **Optimized Parallelization:** Use of ThreadPoolExecutor to maximize efficiency
+- **Multi-format Export:** Support for CSV and JSON formats with structural validation
+- **Built-in Observability:** Comprehensive metrics, structured logs, and execution reports
 
-### 📊 Analyse de données via Snowflake
-- **Pipeline ETL**: Système d'ingestion et transformation automatisé
-- **Modélisation analytique**: Tables normalisées et dénormalisées pour différents cas d'usage
-- **Capacités analytiques**: Segmentation produit, analyse de sentiment et autres fonctionnalités
+### 📊 Data Analysis via Snowflake
+- **ETL Pipeline:** Automated ingestion and transformation system
+- **Analytical Modeling:** Normalized and denormalized tables for various use cases
+- **Analytical Capabilities:** Product segmentation, sentiment analysis, and other features
 
-## 📋 Prérequis
-
+## 📋 Prerequisites
 - Python 3.8+
 - Apache Airflow 2.5.0+
-- PostgreSQL 13+ (recommandé pour Airflow)
-- Compte Snowflake avec permissions adéquates
-- *(Optionnel)* AWS S3 pour le stockage intermédiaire des données extraites
+- PostgreSQL 13+ (recommended for Airflow)
+- Snowflake account with adequate permissions
+- *(Optional)* AWS S3 for intermediate storage of extracted data
 
-### Dépendances Python
-
-```
+### Python Dependencies
+```bash
 apache-airflow>=2.5.0
 requests>=2.28.0
 beautifulsoup4>=4.11.0
@@ -80,24 +75,23 @@ snowflake-connector-python>=2.7.0
 ```
 
 ## 🔧 Installation
-
 ```bash
-# Clonage du référentiel
+# Clone the repository
 git clone https://github.com/zakariaeyahya/amazon.git
 cd amazon-scraping
 
-# Configuration de l'environnement virtuel
+# Set up a virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Définition du répertoire home d'Airflow
+# Set Airflow home directory
 export AIRFLOW_HOME=/path/to/airflow
 
-# Initialisation de la base de données
+# Initialize the database
 airflow db init
 
-# Création de l'utilisateur administrateur
+# Create an admin user
 airflow users create \
     --username admin \
     --firstname Admin \
@@ -106,12 +100,11 @@ airflow users create \
     --email admin@example.com \
     --password your_password
 
-# Configuration des répertoires nécessaires
+# Set up necessary directories
 mkdir -p $AIRFLOW_HOME/{dags,logs,plugins}
 ```
 
 ## 🏗️ Architecture
-
 ```
 amazon-analytics/
 ├── airflow_dags/
@@ -137,43 +130,41 @@ amazon-analytics/
 
 ## ⚙️ Configuration
 
-### Configuration de l'extracteur
-
+### Scraper Configuration
 ```json
 {
   "extraction": {
     "categories": ["electronics", "computers", "smart-home"],
-    "limites": {
-      "produits_par_categorie": 100,
-      "pages_par_categorie": 5
+    "limits": {
+      "products_per_category": 100,
+      "pages_per_category": 5
     },
-    "controle_debit": {
-      "requetes_par_seconde": 2,
-      "taille_burst": 5,
-      "delai_apres_echec": 300
+    "rate_control": {
+      "requests_per_second": 2,
+      "burst_size": 5,
+      "delay_after_failure": 300
     },
     "proxies": {
-      "actifs": true,
-      "liste": [
+      "active": true,
+      "list": [
         "http://proxy1.example.com:8080",
         "http://proxy2.example.com:8080"
       ],
-      "intervalle_rotation": 100
+      "rotation_interval": 100
     },
-    "agents_utilisateurs": {
-      "actifs": true,
-      "intervalle_rotation": 50
+    "user_agents": {
+      "active": true,
+      "rotation_interval": 50
     }
   },
-  "traitement": {
-    "taille_lot": 5,
-    "travailleurs_max": 2
+  "processing": {
+    "batch_size": 5,
+    "max_workers": 2
   }
 }
 ```
 
-### Configuration Snowflake
-
+### Snowflake Configuration
 ```python
 # snowflakeconnection.py
 conn_config = {
@@ -186,49 +177,49 @@ conn_config = {
 }
 ```
 
-## 🔄 Pipeline d'exécution
+## 🔄 Execution Pipeline
 
-### Phase d'extraction
-1. Vérification préliminaire - Validation de l'environnement et des dépendances
-2. Extraction des catégories - Cartographie de la taxonomie produit
-3. Extraction des détails produits - Collecte des métadonnées principales
-4. Extraction des avis - Collecte des données utilisateurs
-5. Post-traitement - Nettoyage et normalisation
-6. Génération de rapports - Métriques d'exécution et validations
+### Extraction Phase
+1. Preliminary Check – Environment and dependency validation
+2. Category Extraction – Product taxonomy mapping
+3. Product Details Extraction – Collection of main metadata
+4. Review Extraction – Collection of user data
+5. Post-processing – Cleaning and normalization
+6. Report Generation – Execution metrics and validations
 
-### Phase d'analyse Snowflake
-1. Chargement des données - Ingestion dans les tables Snowflake
-2. Transformation - Normalisation et enrichissement
-3. Modélisation - Création des vues analytiques
-4. Segmentation - Classification par prix et autres dimensions
-5. Analyse avancée - Requêtes analytiques et rapports
+### Snowflake Analysis Phase
+1. Data Loading – Ingestion into Snowflake tables
+2. Transformation – Normalization and enrichment
+3. Modeling – Creation of analytical views
+4. Segmentation – Classification by price and other dimensions
+5. Advanced Analysis – Analytical queries and reports
 
-## 💾 Modèle de données
+## 💾 Data Model
 
-### Tables principales
+### Main Tables
+
 
 | Table | Description |
 |-------|-------------|
-| `product_info1` | Données fondamentales produit |
-| `product_info2` | Spécifications techniques produit |
-| `review` | Avis et évaluations utilisateurs |
-| `full_product_info` | Vue dénormalisée intégrée |
-| `classe_prix` | Segmentation par gamme de prix |
+| `product_info1` | Core product data |
+| `product_info2` | Technical product specifications |
+| `review` | User reviews and ratings |
+| `full_product_info` | Integrated denormalized view |
+| `classe_prix` | Price range segmentation |
 
-> **Note:** Le schéma est conçu pour optimiser à la fois les requêtes analytiques et les opérations OLTP.
+> **Note:** The schema is designed to optimize both analytical queries and OLTP operations.
 
-## 💡 Exemples d'utilisation
+## 💡 Usage Examples
 
-### Classification de produits et analyse de sentiment
-
+### Product Classification and Sentiment Analysis
 ```sql
 SELECT
     p.asin,
     p.titre,
     p.prix,
-    c.classe AS gamme_prix,
+    c.classe AS price_range,
     r.sentiment,
-    COUNT(r.review_id) AS nombre_avis
+    COUNT(r.review_id) AS review_count
 FROM
     full_product_info p
 JOIN
@@ -238,13 +229,12 @@ LEFT JOIN
 GROUP BY
     1, 2, 3, 4, 5
 ORDER BY
-    nombre_avis DESC;
+    review_count DESC;
 ```
 
-### Transformation des spécifications techniques
-
+### Transformation of Technical Specifications
 ```sql
--- Normalisation des tailles de disque dur en GB
+-- Normalize hard drive sizes to GB
 UPDATE product_info2
 SET disque_dur =
     CASE
@@ -254,27 +244,25 @@ SET disque_dur =
     END;
 ```
 
-## 🔧 Résolution des problèmes
+## 🔧 Troubleshooting
 
-### DAGs Airflow
-- Vérifier les permissions des fichiers DAG
-- Valider la syntaxe Python avec `airflow dags list` et `airflow dags show`
-- Consulter les logs pour erreurs de syntaxe ou d'importation
+### Airflow DAGs
+- Check DAG file permissions
+- Validate Python syntax with `airflow dags list` and `airflow dags show`
+- Review logs for syntax or import errors
 
-### Limitations de taux
-- Implémenter une stratégie de backoff progressif
-- Augmenter l'intervalle entre requêtes
-- Diversifier les proxies et agents utilisateurs
+### Rate Limiting
+- Implement progressive backoff strategy
+- Increase interval between requests
+- Diversify proxies and user agents
 
-### Connexion Snowflake
-- Vérifier les identifiants et permissions
-- S'assurer que l'adresse IP est autorisée
-- Tester la connexion avec une requête simple
+### Snowflake Connection
+- Verify credentials and permissions
+- Ensure IP address is allowed
+- Test connection with a simple query
 
-## 📜 Licence
-
-Ce projet est distribué sous [licence MIT](LICENSE).
+## 📜 License
+This project is distributed under the [MIT License](LICENSE).
 
 ---
-
-© 2025 - Plateforme d'Extraction et d'Analyse de Produits Amazon - Tous droits réservés
+© 2025 - Amazon Product Extraction and Analysis Platform - All rights reserved
